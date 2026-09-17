@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-obsidian: #090C10;
+  --surface-console: #0E131B;
+  --border-hairline: #1E2633;
+}
+
+body {
+  background-color: var(--bg-obsidian);
+  color: #F1F5F9;
+  min-height: 100vh;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tactile hardware buttons */
+.btn-hardware {
+  transition: transform 0.1s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease;
+}
+.btn-hardware:active {
+  transform: translateY(1px);
+}
+
+/* Monospace data numbers */
+.num-data {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Custom technical scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #090C10;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E2633;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
