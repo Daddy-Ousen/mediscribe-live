@@ -23,10 +23,16 @@ export class StreamingTranscriptionClient {
     this.callbacks.onStatusChange?.('connecting');
 
     try {
-      // 1. Fetch short-lived token from backend
-      const tokenRes = await fetch('/api/token/streaming');
+      // 1. Fetch short-lived token from backend with cache-busting query & no-store headers
+      const tokenRes = await fetch(`/api/token/streaming?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
       if (!tokenRes.ok) {
-        const err = await tokenRes.json();
+        const err = await tokenRes.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to mint Streaming STT token');
       }
       const { token } = await tokenRes.json();
@@ -55,6 +61,9 @@ export class StreamingTranscriptionClient {
         this.isConnected = false;
         this.stopMicrophone();
         this.callbacks.onStatusChange?.('disconnected');
+        if (ev.reason && (ev.reason.includes('expired') || ev.reason.includes('Unauthorized'))) {
+          this.callbacks.onError?.('Streaming token expired. Click Start Ambient Scribe to start a fresh session.');
+        }
       };
     } catch (err: any) {
       this.callbacks.onError?.(err?.message || 'Failed to connect to streaming service');

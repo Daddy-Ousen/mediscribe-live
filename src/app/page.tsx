@@ -520,14 +520,48 @@ export default function MediScribeConsole() {
               currentDialogue.push(turn);
             }
 
+            let newPatientName = prev.patientName;
+            let newChiefComplaint = prev.chiefComplaint;
+            let newMeds = [...prev.patientMeds];
+
+            // Extract patient name if currently default intake label
+            if (prev.patientName.startsWith('Patient Intake') || prev.patientName === 'Patient') {
+              const nameMatch = turn.text.match(/(?:my name is|i am|i'm|name's|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+              if (nameMatch && nameMatch[1]) {
+                newPatientName = nameMatch[1].trim();
+                setShiftAlertMessage(`Patient demographics detected from dialogue: ${newPatientName}`);
+              }
+            }
+
+            // Extract medication entities
+            if (turn.entities && turn.entities.length > 0) {
+              const detectedMeds = turn.entities
+                .filter(e => e.category === 'medication')
+                .map(e => e.text);
+              if (detectedMeds.length > 0) {
+                newMeds = Array.from(new Set([...newMeds, ...detectedMeds]));
+              }
+            }
+
+            // Extract chief complaint from early patient utterances if empty
+            if (!newChiefComplaint || newChiefComplaint === 'General Bedside Triage' || newChiefComplaint === 'Awaiting intake') {
+              if (turn.speaker === 'Patient' && turn.text.trim().length > 15) {
+                newChiefComplaint = turn.text.slice(0, 70);
+              }
+            }
+
             return {
               ...prev,
+              patientName: newPatientName,
+              chiefComplaint: newChiefComplaint,
+              patientMeds: newMeds,
               scribeDialogue: currentDialogue
             };
           });
         },
         onError: (err) => {
-          alert(`Streaming STT Error: ${err}`);
+          console.error('Streaming STT error:', err);
+          setShiftAlertMessage(`Ambient Scribe: ${err}`);
         }
       });
 

@@ -31,10 +31,17 @@ export class VoiceAgentClient {
     this.callbacks.onStatusChange?.('connecting');
 
     try {
-      // 1. Mint token from backend
-      const tokenRes = await fetch('/api/token/voice-agent', { method: 'POST' });
+      // 1. Mint token from backend with cache-busting query
+      const tokenRes = await fetch(`/api/token/voice-agent?t=${Date.now()}`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
       if (!tokenRes.ok) {
-        const err = await tokenRes.json();
+        const err = await tokenRes.json().catch(() => ({}));
         throw new Error(err.error || 'Failed to mint Voice Agent token');
       }
       const { token } = await tokenRes.json();
