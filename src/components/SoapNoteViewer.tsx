@@ -2,25 +2,27 @@
 
 import React, { useState } from 'react';
 import { SoapNote } from '@/types/clinical';
-import { FileText, Copy, Check, Code2, Clipboard, ArrowUpRight } from 'lucide-react';
+import { FileText, Copy, Check, Code2, Clipboard, ArrowUpRight, AlertCircle } from 'lucide-react';
 
 interface SoapNoteViewerProps {
   soapNote: SoapNote | null;
   onGenerateNew?: () => void;
   isLoading?: boolean;
+  warning?: string | null;
 }
 
 export const SoapNoteViewer: React.FC<SoapNoteViewerProps> = ({
   soapNote,
   onGenerateNew,
-  isLoading = false
+  isLoading = false,
+  warning = null
 }) => {
   const [copied, setCopied] = useState(false);
   const [showFhir, setShowFhir] = useState(false);
 
   if (!soapNote) {
     return (
-      <div className="bg-console-surface border border-console-border rounded-xl p-12 text-center font-mono">
+      <div className="bg-console-surface border border-console-border rounded-xl p-8 sm:p-12 text-center font-mono">
         <div className="w-12 h-12 mx-auto rounded-lg bg-obsidian-500 border border-console-border flex items-center justify-center text-slate-400 mb-4">
           <FileText className="w-6 h-6" />
         </div>
@@ -28,6 +30,19 @@ export const SoapNoteViewer: React.FC<SoapNoteViewerProps> = ({
         <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 mb-6 font-sans leading-relaxed">
           Record a bedside intake or ambient consultation session. MediScribe compiles standardized SOAP documentation with verified ICD-10 diagnostic coding and HL7 FHIR v4 serialization.
         </p>
+
+        {warning && (
+          <div className="mb-6 max-w-lg mx-auto p-3.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5 text-left">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="font-sans leading-relaxed">
+              <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
+                Documentation Prerequisite Missing
+              </span>
+              {warning}
+            </div>
+          </div>
+        )}
+
         {onGenerateNew && (
           <button
             onClick={onGenerateNew}

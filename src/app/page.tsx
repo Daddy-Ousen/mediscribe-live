@@ -19,6 +19,7 @@ import {
   Terminal,
   Play,
   CheckCircle,
+  AlertCircle,
   ShieldAlert,
   User,
   UserPlus,
@@ -83,6 +84,7 @@ export default function MediScribeConsole() {
 
   // Clinical Summary State
   const [isGeneratingSoap, setIsGeneratingSoap] = useState(false);
+  const [compileWarning, setCompileWarning] = useState<string | null>(null);
 
   // Drug Checker standalone tool state
   const [drugA, setDrugA] = useState('Warfarin');
@@ -131,6 +133,7 @@ export default function MediScribeConsole() {
       scribeClientRef.current?.disconnect();
       setScribeStatus('disconnected');
     }
+    setCompileWarning(null);
     setActivePatientId(patientId);
   };
 
@@ -144,6 +147,7 @@ export default function MediScribeConsole() {
       scribeClientRef.current?.disconnect();
       setScribeStatus('disconnected');
     }
+    setCompileWarning(null);
 
     const currentName = activeEncounter.patientName;
     const completedTime = new Date().toLocaleTimeString();
@@ -246,6 +250,7 @@ export default function MediScribeConsole() {
     };
 
     setEncounters(prev => [...prev, newEncounter]);
+    setCompileWarning(null);
     setActivePatientId(newId);
     setShiftAlertMessage(`New patient encounter initialized (${newEncounter.bed}). All channels cleared for intake.`);
     setTimeout(() => setShiftAlertMessage(null), 5000);
@@ -254,6 +259,7 @@ export default function MediScribeConsole() {
   // Discharge / Dismiss Encounter from Roster & Ledger
   const handleDismissPatient = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    setCompileWarning(null);
     if (encounters.length <= 1) {
       const resetId = `enc-${Date.now().toString().slice(-6)}`;
       const cleanEncounter: PatientEncounter = {
@@ -328,6 +334,7 @@ export default function MediScribeConsole() {
 
   // 1. Toggle Voice Agent (Bedside Triage)
   const handleToggleVoiceAgent = async () => {
+    setCompileWarning(null);
     if (voiceStatus !== 'disconnected') {
       voiceClientRef.current?.disconnect();
       setVoiceStatus('disconnected');
@@ -344,6 +351,7 @@ export default function MediScribeConsole() {
           setTimeout(() => setShiftAlertMessage(null), 6000);
         },
         onUserTranscript: (text, isFinal) => {
+          setCompileWarning(null);
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.voiceDialogue];
             const last = currentDialogue[currentDialogue.length - 1];
@@ -427,6 +435,7 @@ export default function MediScribeConsole() {
           });
         },
         onAgentTranscript: (text) => {
+          setCompileWarning(null);
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.voiceDialogue];
             const last = currentDialogue[currentDialogue.length - 1];
@@ -525,6 +534,7 @@ export default function MediScribeConsole() {
 
   // 2. Toggle Ambient Scribe
   const handleToggleScribe = async () => {
+    setCompileWarning(null);
     if (scribeStatus !== 'disconnected') {
       scribeClientRef.current?.disconnect();
       setScribeStatus('disconnected');
@@ -536,6 +546,7 @@ export default function MediScribeConsole() {
         onStatusChange: (status) => setScribeStatus(status as any),
         onVolumeChange: (vol) => setVolume(vol),
         onTurn: (turn) => {
+          setCompileWarning(null);
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.scribeDialogue];
             const last = currentDialogue[currentDialogue.length - 1];
@@ -634,27 +645,42 @@ export default function MediScribeConsole() {
   };
 
   // 3. Generate SOAP Note for Active Patient
-  const handleGenerateSoapNote = async () => {
-    setIsGeneratingSoap(true);
-
-    const sourceDialogue = cockpitMode === 'ambient-scribe'
+  const handleGenerateSoapNote = async (forcedSource?: 'voice-agent' | 'ambient-scribe') => {
+    let sourceDialogue = forcedSource === 'ambient-scribe'
+      ? activeEncounter.scribeDialogue
+      : forcedSource === 'voice-agent'
+      ? activeEncounter.voiceDialogue
+      : cockpitMode === 'ambient-scribe'
       ? activeEncounter.scribeDialogue
       : activeEncounter.voiceDialogue;
 
-    const combinedTranscript = sourceDialogue.map((d) => `${d.speaker}: ${d.text}`).join('\n');
+    // If generic compile requested (e.g. from SOAP section) and primary mode is empty, check alternate mode
+    if ((!sourceDialogue || sourceDialogue.length === 0) && !forcedSource) {
+      const alternate = cockpitMode === 'ambient-scribe'
+        ? activeEncounter.voiceDialogue
+        : activeEncounter.scribeDialogue;
+      if (alternate && alternate.length > 0) {
+        sourceDialogue = alternate;
+      }
+    }
 
-    const clinicalFallback = `Patient: ${activeEncounter.patientName} (${activeEncounter.age}YO ${activeEncounter.gender})
-Bed/Location: ${activeEncounter.bed} • MRN: ${activeEncounter.mrn}
-Chief Complaint: ${activeEncounter.chiefComplaint}
-Acuity Level: ${activeEncounter.esiScore}
-Pain Score: ${activeEncounter.painScale}/10
-Reconciled Medications: ${activeEncounter.patientMeds.join(', ') || 'None reported'}
-Vitals:
-${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`).join('\n')}`;
+    // Reject if 0 speech turns recorded to ensure no invented clinical data
+    if (!sourceDialogue || sourceDialogue.length === 0) {
+      const modeName = forcedSource === 'ambient-scribe'
+        ? 'Ambient Scribe'
+        : forcedSource === 'voice-agent'
+        ? 'Bedside Voice Assistant'
+        : (cockpitMode === 'ambient-scribe' ? 'Ambient Scribe' : 'Bedside Voice Assistant');
+      const warningMsg = `Cannot compile SOAP documentation: 0 speech turns recorded in ${modeName} for ${activeEncounter.patientName}. Please record or conduct a clinical dialogue first to ensure authentic documentation.`;
+      setCompileWarning(warningMsg);
+      setShiftAlertMessage(`Compile Blocked: 0 speech turns recorded. Authentic consultation dialogue required to compile SOAP note.`);
+      return;
+    }
 
-    const effectiveTranscript = combinedTranscript.trim().length > 0
-      ? combinedTranscript
-      : clinicalFallback;
+    setCompileWarning(null);
+    setIsGeneratingSoap(true);
+
+    const effectiveTranscript = sourceDialogue.map((d) => `${d.speaker}: ${d.text}`).join('\n');
 
     try {
       const res = await fetch('/api/soap/generate', {
@@ -672,7 +698,10 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
         })
       });
 
-      if (!res.ok) throw new Error('Clinical synthesis request failed');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Clinical synthesis request failed');
+      }
       const data = await res.json();
 
       updateActiveEncounter(prev => ({
@@ -687,7 +716,8 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
       }
     } catch (err: any) {
       console.error('SOAP Synthesis Error:', err);
-      alert(`SOAP Compilation Failure: ${err.message}`);
+      setCompileWarning(`SOAP Compilation Error: ${err.message}`);
+      setShiftAlertMessage(`Compilation Error: ${err.message}`);
     } finally {
       setIsGeneratingSoap(false);
     }
@@ -985,7 +1015,10 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
             {/* Mode Switcher Pill */}
             <div className="bg-obsidian-500 p-1 rounded-lg border border-console-border flex items-center font-mono text-xs shrink-0 self-start md:self-auto">
               <button
-                onClick={() => setCockpitMode('voice-agent')}
+                onClick={() => {
+                  setCockpitMode('voice-agent');
+                  setCompileWarning(null);
+                }}
                 className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                   cockpitMode === 'voice-agent'
                     ? 'bg-emerald-500 text-slate-950 font-black'
@@ -996,7 +1029,10 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                 Bedside Voice Agent
               </button>
               <button
-                onClick={() => setCockpitMode('ambient-scribe')}
+                onClick={() => {
+                  setCockpitMode('ambient-scribe');
+                  setCompileWarning(null);
+                }}
                 className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                   cockpitMode === 'ambient-scribe'
                     ? 'bg-cyan-500 text-slate-950 font-black'
@@ -1086,13 +1122,26 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                     )}
                   </div>
 
+                  {/* Warning Banner if 0 speech turns */}
+                  {compileWarning && (
+                    <div className="p-3 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="font-sans leading-relaxed">
+                        <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
+                          Documentation Prerequisite Missing
+                        </span>
+                        {compileWarning}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Compile Action Bar */}
                   <div className="flex flex-wrap items-center justify-between pt-2 border-t border-console-border gap-2 text-xs">
                     <span className="text-slate-500 font-mono text-[11px]">
                       {activeEncounter.patientName} &bull; {activeEncounter.voiceDialogue.length} speech turns recorded
                     </span>
                     <button
-                      onClick={handleGenerateSoapNote}
+                      onClick={() => handleGenerateSoapNote('voice-agent')}
                       disabled={isGeneratingSoap}
                       className="btn-hardware px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
                     >
@@ -1174,13 +1223,26 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                     )}
                   </div>
 
+                  {/* Warning Banner if 0 speech turns */}
+                  {compileWarning && (
+                    <div className="p-3 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="font-sans leading-relaxed">
+                        <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
+                          Documentation Prerequisite Missing
+                        </span>
+                        {compileWarning}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Compile Action Bar */}
                   <div className="flex flex-wrap items-center justify-between pt-2 border-t border-console-border gap-2 text-xs">
                     <span className="text-slate-500 font-mono text-[11px]">
                       {activeEncounter.patientName} &bull; {activeEncounter.scribeDialogue.length} consultation turns recorded
                     </span>
                     <button
-                      onClick={handleGenerateSoapNote}
+                      onClick={() => handleGenerateSoapNote('ambient-scribe')}
                       disabled={isGeneratingSoap}
                       className="btn-hardware px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
                     >
@@ -1635,7 +1697,7 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
           </div>
 
           <button
-            onClick={handleGenerateSoapNote}
+            onClick={() => handleGenerateSoapNote()}
             disabled={isGeneratingSoap}
             className="btn-hardware px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-2 self-start md:self-auto disabled:opacity-50"
           >
@@ -1644,10 +1706,23 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
           </button>
         </div>
 
+        {compileWarning && (
+          <div className="mb-6 p-3.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="font-sans leading-relaxed">
+              <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
+                Documentation Prerequisite Missing
+              </span>
+              {compileWarning}
+            </div>
+          </div>
+        )}
+
         <SoapNoteViewer
           soapNote={activeEncounter.soapNote}
-          onGenerateNew={handleGenerateSoapNote}
+          onGenerateNew={() => handleGenerateSoapNote()}
           isLoading={isGeneratingSoap}
+          warning={compileWarning}
         />
       </section>
 

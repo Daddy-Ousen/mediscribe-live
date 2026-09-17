@@ -39,9 +39,33 @@ export async function POST(request: Request) {
       vitals = {}
     } = body;
 
+    // Reject if no consultation dialogue was provided to prevent inventing clinical data
+    if (!transcript || transcript.trim().length < 15) {
+      return NextResponse.json(
+        { error: 'No dialogue data provided. Cannot generate SOAP documentation without recorded consultation dialogue.' },
+        { status: 400 }
+      );
+    }
+
     const apiKey = process.env.ASSEMBLYAI_API_KEY;
 
-    // Detect extracted medical entities from transcript
+    // Helper to never invent fake vitals numbers
+    const sanitizeVital = (val: string | undefined): string => {
+      if (!val || val === '--' || val === '--/--' || val === '-- bpm' || val === '--%' || val === '--/min' || val === '--°F') {
+        return 'Not recorded during encounter';
+      }
+      return val;
+    };
+
+    const recordedVitals = {
+      'Blood Pressure': sanitizeVital(vitals['Blood Pressure']),
+      'Heart Rate': sanitizeVital(vitals['Heart Rate']),
+      'SpO2': sanitizeVital(vitals['SpO2']),
+      'Respiratory Rate': sanitizeVital(vitals['Respiratory Rate']),
+      'Temperature': sanitizeVital(vitals['Temperature'])
+    };
+
+    // Detect extracted medical entities from authentic transcript
     const detectedEntities = extractMedicalEntities(transcript);
     const extractedMeds = detectedEntities
       .filter((e) => e.category === 'medication')
@@ -55,30 +79,34 @@ export async function POST(request: Request) {
       try {
         const schemaInstructions = `You are a board-certified emergency physician and clinical documentation scribe.
 Synthesize the doctor-patient consultation transcript into a highly accurate, professional medical SOAP note.
-CRITICAL: Base your output strictly on the symptoms, timeline, physical observations, and plan discussed in the transcript.
+CRITICAL CLINICAL INTEGRITY RULES:
+1. STRICTLY ACCURATE TO TRANSCRIPT: You must document ONLY symptoms, complaints, observations, and plans that were explicitly discussed in the consultation dialogue.
+2. ZERO INVENTED DATA: Do NOT fabricate, invent, or extrapolate unmentioned diagnoses, medications, allergies, or physical exam findings.
+3. ABSENCE OF INFORMATION: If a section was not discussed (for example, no allergies were discussed, no medications were mentioned, or no physical exam was performed), explicitly record 'None reported during encounter' or 'Not assessed in consultation'.
+4. VITALS: Only reference vital signs that were actually provided in the patient telemetry or stated in the dialogue. If a vital is marked 'Not recorded during encounter', do not assume or invent normal vitals.
 Output ONLY a valid, parseable JSON object without markdown code blocks, backticks, or preamble:
 {
-  "chiefComplaint": "Patient's primary stated complaint",
-  "historyOfPresentIllness": "Chronological narrative of onset, duration, character, severity, and aggravating/alleviating factors",
-  "reviewOfSystems": ["Array of 3-5 relevant body systems reviewed based on the symptoms discussed"],
-  "physicalExam": ["Array of 3-4 physical exam findings discussed or clinically pertinent"],
-  "diagnosticResults": ["Array of point-of-care tests, imaging, or lab results mentioned (or 'Pending clinical review')"],
-  "allergies": ["Array of allergies mentioned or 'NKDA (No Known Drug Allergies)'"],
-  "currentMedications": ["Array of medications mentioned or confirmed"],
-  "primaryDiagnosis": "Most accurate clinical diagnosis for this specific consultation",
+  "chiefComplaint": "Patient's primary stated complaint from dialogue",
+  "historyOfPresentIllness": "Chronological narrative of onset, duration, character, severity, and aggravating/alleviating factors stated in dialogue",
+  "reviewOfSystems": ["Array of 3-5 relevant body systems reviewed based only on symptoms discussed"],
+  "physicalExam": ["Physical exam observations discussed by provider, or 'No physical exam documented in dialogue' if not examined"],
+  "diagnosticResults": ["Diagnostic tests or imaging discussed, or 'No diagnostic tests discussed' if none"],
+  "allergies": ["Reported allergies, or 'No allergies stated during encounter'"],
+  "currentMedications": ["Current medications reported, or 'No medications reported during encounter'"],
+  "primaryDiagnosis": "Accurate clinical diagnosis derived directly from consultation dialogue",
   "icd10Code": "Accurate ICD-10 code for the primary diagnosis",
   "differentialDiagnoses": [
     { "diagnosis": "Differential diagnosis 1", "icd10": "Code 1" },
     { "diagnosis": "Differential diagnosis 2", "icd10": "Code 2" }
   ],
-  "clinicalRationale": "Medical rationale explaining why the primary diagnosis was chosen and what findings support it",
+  "clinicalRationale": "Medical rationale explaining why diagnosis was chosen based strictly on reported findings",
   "plan": {
     "medicationsPrescribed": [
       { "name": "Medication name", "dosage": "Dosage/Route", "instructions": "Directions for use" }
     ],
-    "diagnosticsOrdered": ["Tests, labs, or imaging ordered"],
-    "patientInstructions": "Clear, patient-friendly self-care and return precautions",
-    "followUp": "Specific timeframe and instructions for follow-up"
+    "diagnosticsOrdered": ["Tests, labs, or imaging ordered, or empty array if none"],
+    "patientInstructions": "Actionable, clear self-care instructions and return precautions for this condition",
+    "followUp": "Follow-up timeframe and instructions"
   }
 }`;
 
@@ -155,16 +183,10 @@ Output ONLY a valid, parseable JSON object without markdown code blocks, backtic
             : (combinedMeds.length > 0 ? combinedMeds : ['None reported'])
         },
         objective: {
-          vitalSigns: {
-            'Blood Pressure': vitals['Blood Pressure'] || '124/82 mmHg',
-            'Heart Rate': vitals['Heart Rate'] || '78 bpm (Regular)',
-            'SpO2': vitals['SpO2'] || '98% on room air',
-            'Respiratory Rate': vitals['Respiratory Rate'] || '16 breaths/min',
-            'Temperature': vitals['Temperature'] || '98.6 °F (37.0 °C)'
-          },
+          vitalSigns: recordedVitals,
           physicalExam: Array.isArray(aiParsedNote.physicalExam) && aiParsedNote.physicalExam.length > 0
             ? aiParsedNote.physicalExam
-            : ['Constitutional: Alert, oriented, no acute distress observed.'],
+            : ['No physical examination documented in consultation dialogue'],
           diagnosticResults: Array.isArray(aiParsedNote.diagnosticResults) && aiParsedNote.diagnosticResults.length > 0
             ? aiParsedNote.diagnosticResults
             : ['Bedside evaluation documented']
@@ -486,15 +508,9 @@ Output ONLY a valid, parseable JSON object without markdown code blocks, backtic
         currentMedications: combinedMeds.length > 0 ? combinedMeds : ['None reported']
       },
       objective: {
-        vitalSigns: {
-          'Blood Pressure': vitals['Blood Pressure'] || '122/80 mmHg',
-          'Heart Rate': vitals['Heart Rate'] || '76 bpm (Regular)',
-          'SpO2': vitals['SpO2'] || '98% on room air',
-          'Respiratory Rate': vitals['Respiratory Rate'] || '16 breaths/min',
-          'Temperature': vitals['Temperature'] || '98.6 °F (37.0 °C)'
-        },
-        physicalExam: derivedExam,
-        diagnosticResults: derivedDiagnostics
+        vitalSigns: recordedVitals,
+        physicalExam: derivedExam.length > 0 ? derivedExam : ['No physical examination documented in consultation dialogue'],
+        diagnosticResults: derivedDiagnostics.length > 0 ? derivedDiagnostics : ['No diagnostic tests ordered']
       },
       assessment: {
         primaryDiagnosis: derivedPrimaryDiag,
