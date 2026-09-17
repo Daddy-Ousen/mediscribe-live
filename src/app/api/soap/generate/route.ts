@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { SoapNote } from '@/types/clinical';
 import { checkDrugInteractions, calculateEsiScore } from '@/lib/clinical/drug-database';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();

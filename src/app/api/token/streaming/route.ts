@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       token: data.token,
       expires_in: 60,
-      ws_url: `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&domain=medical-v1&speaker_labels=true&token=${data.token}`
+      ws_url: `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&token=${data.token}`
     });
   } catch (error: any) {
     console.error('Streaming STT token minting error:', error);

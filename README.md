@@ -26,8 +26,9 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
    - Synthesizes verbal dialogue into standardized clinical SOAP notes (Subjective, Objective, Assessment, Plan).
    - Automated ICD-10 diagnostic coding classifications (e.g. `I20.0`, `I21.0`).
    - Generates and exports HL7 FHIR v4 Document Bundles (`application/fhir+json`).
-5. **Judge Simulation Dossiers**:
-   - Includes 3 pre-configured high-acuity clinical scenarios (Acute Coronary Syndrome, Sildenafil/Nitrate lethal contraindication, Lisinopril/Potassium hyperkalemia) so hackathon judges can evaluate the full voice, tool calling, and SOAP pipeline with zero setup.
+5. **Real-Time Spoken Demographics & Autonomous Intake Confirmation**:
+   - Detects patient name and demographics directly from spoken intake turns, updating the clinical chart and shift ledger live.
+   - Automatically concludes and closes the audio session upon intake completion with verbal reassurance.
 
 ---
 
@@ -114,23 +115,41 @@ npm run start
 
 ---
 
-## Testing & Evaluation Guide
+## Deploy to Vercel
 
-1. **Department Triage Roster**:
-   - Browse the top roster bar to switch between active patients (`Robert Vance`, `David Miller`, `Eleanor Vance`).
-   - Click **"+ New Patient Intake"** to initialize a clean-slate patient intake.
-   - Click **"Complete Encounter & Next Patient"** to archive the current encounter and advance to the next queued patient.
+Deploy **MediScribe Live** directly to Vercel with zero configuration:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fdaddy-Ousen%2Fmediscribe-live&env=ASSEMBLYAI_API_KEY&envDescription=Your%20AssemblyAI%20API%20Key%20from%20assemblyai.com%2Fdashboard&envLink=https%3A%2F%2Fwww.assemblyai.com%2Fdashboard%2Fapi-keys&project-name=mediscribe-live&repository-name=mediscribe-live)
+
+### Deployment Steps
+1. Click the **Deploy with Vercel** button above or import `https://github.com/daddy-Ousen/mediscribe-live` in the [Vercel Dashboard](https://vercel.com/new).
+2. Set the **Framework Preset** to `Next.js` (auto-detected).
+3. In **Environment Variables**, configure:
+   - **`ASSEMBLYAI_API_KEY`**: Your AssemblyAI production API key ([assemblyai.com/dashboard/api-keys](https://www.assemblyai.com/dashboard/api-keys)).
+4. Click **Deploy**. Vercel will build and launch your live production instance with edge streaming and full Web Audio support.
+
+---
+
+## Testing & Clinical Evaluation Guide
+
+1. **Department Triage Roster & Queue**:
+   - The queue initializes with a clean live intake: **`Patient Intake #1` (BAY 1)**.
+   - Click **"+ New Patient Intake"** to spawn additional patient bays (`BAY 2`, `BAY 3`, etc.).
+   - Click **"Discharge"** to discharge any patient or reset the queue cleanly.
 2. **Bedside Voice Triage**:
-   - Select **Bedside Voice Agent** in the Cockpit.
+   - In the Cockpit, select **Bedside Voice Agent**.
    - Click **"Initialize Voice Triage"** (grant microphone permissions).
-   - Speak to MediScribe: *"Doctor, I have severe chest pain rated 9 out of 10 that started an hour ago. I regularly take Warfarin, and I just took Aspirin."*
-   - Observe the agent respond with spoken audio, update the ESI score, and execute the `check_drug_interaction` and `flag_critical_vital` tools in real time.
+   - Speak to MediScribe: *"Hello, my name is John Miller. I'm here because of crushing chest pain rated 9 out of 10 that started 45 minutes ago. I regularly take Warfarin, and I took Aspirin before coming in."*
+   - Observe:
+     - The patient name dynamically updates to **John Miller** across the active encounter bar, dossier, and shift ledger.
+     - The ESI score escalates to **ESI-2 Emergent**.
+     - Real-time tool calls execute for `check_drug_interaction` (flagging hemorrhage contraindication) and `flag_critical_vital`.
+     - Upon intake conclusion, the agent speaks its closing confirmation and automatically terminates the session.
 3. **Ambient Consultation Scribe**:
    - Switch to **Ambient Scribe** mode.
-   - Click **"Start Ambient Scribe"** to transcribe multi-speaker medical dialogue with `domain: "medical-v1"`.
-   - Click **"Compile SOAP Documentation"** to generate standardized progress notes.
-4. **Judge Simulation Dossiers**:
-   - Scroll to **Chapter 03** and click **"Execute Dossier"** on any pre-configured case for instant evaluation without microphone setup.
+   - Click **"Start Ambient Scribe"** for continuous doctor-patient consultation transcription with medical nomenclature recognition.
+4. **Automated SOAP & FHIR Documentation**:
+   - Click **"Compile SOAP Documentation"** to synthesize verbal dialogues and triage presentations into structured SOAP notes with ICD-10 codification and HL7 FHIR v4 bundles.
 
 ---
 
