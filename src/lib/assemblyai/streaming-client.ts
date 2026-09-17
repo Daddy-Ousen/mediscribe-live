@@ -31,8 +31,8 @@ export class StreamingTranscriptionClient {
       }
       const { token } = await tokenRes.json();
 
-      // 2. Open WebSocket to AssemblyAI Streaming Edge with medical-v1 and speaker_labels
-      const wsUrl = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&domain=medical-v1&speaker_labels=true&token=${token}`;
+      // 2. Open WebSocket to AssemblyAI Streaming Edge
+      const wsUrl = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&token=${token}`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {

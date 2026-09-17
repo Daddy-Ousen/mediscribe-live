@@ -9,6 +9,7 @@ export interface VoiceAgentCallbacks {
   onAgentTranscript?: (text: string) => void;
   onToolCall?: (event: ToolExecutionEvent) => void;
   onVolumeChange?: (volume: number) => void;
+  onAutoClose?: (reason: string) => void;
   onError?: (error: string) => void;
 }
 
@@ -19,6 +20,7 @@ export class VoiceAgentClient {
   private isReady: boolean = false;
   private callbacks: VoiceAgentCallbacks;
   private currentAgentReply: string = '';
+  private shouldAutoClose: boolean = false;
 
   constructor(callbacks: VoiceAgentCallbacks = {}) {
     this.callbacks = callbacks;
@@ -76,14 +78,15 @@ export class VoiceAgentClient {
       session: {
         system_prompt: `You are MediScribe, an autonomous, highly professional emergency room bedside triage assistant. 
 Your goal is to conduct a fast, empathetic, and structured patient intake:
-1. Greet the patient warmly and ask for their chief complaint.
-2. Ask about the onset of symptoms and ask them to rate their pain on a scale from 1 to 10.
-3. Inquire about any known allergies and what medications they currently take.
-4. If the patient mentions medications, call the 'check_drug_interaction' tool immediately to check safety.
-5. If the pain scale is 8 or higher, or if symptoms suggest cardiac ischemia or acute compromise, immediately call the 'flag_critical_vital' tool.
-6. Once the core information is gathered, call 'record_patient_intake' and reassure the patient that the emergency care team has received their clinical brief.
-Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentences) suitable for spoken audio.`,
-        greeting: "Hello, I am MediScribe, your bedside intake copilot. I'm here to gather your initial clinical details for the emergency medical team. Could you please tell me what brings you in today?",
+1. Greet the patient warmly and ask for their name and what brings them to the emergency department today.
+2. When the patient states their name, immediately call the 'set_patient_identity' tool to update their medical chart.
+3. Inquire about the onset of symptoms and ask them to rate their pain on a scale from 1 to 10.
+4. Inquire about known allergies and what medications they currently take at home.
+5. If the patient mentions medications, call 'check_drug_interaction' immediately to check safety.
+6. If the pain scale is 8 or higher, or if symptoms suggest cardiac ischemia or acute compromise, immediately call 'flag_critical_vital'.
+7. Once the core intake information is gathered, or when the patient indicates they are done (e.g. saying 'that is all', 'thank you', 'no more medications'), immediately call 'confirm_and_close_session' with your final verbal reassurance to automatically conclude and close the session.
+Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoken audio.`,
+        greeting: "Hello, I am MediScribe, your bedside intake copilot. Could you please tell me your name and what brings you to the emergency department today?",
         input: {
           format: { encoding: 'audio/pcm' },
           keyterms: [
@@ -102,6 +105,19 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
           format: { encoding: 'audio/pcm' }
         },
         tools: [
+          {
+            type: 'function',
+            name: 'set_patient_identity',
+            description: 'Update the active patient chart with their full name and demographics.',
+            parameters: {
+              type: 'object',
+              properties: {
+                patient_name: { type: 'string', description: 'Confirmed legal or preferred patient name' },
+                age: { type: 'number', description: 'Patient age if provided' }
+              },
+              required: ['patient_name']
+            }
+          },
           {
             type: 'function',
             name: 'check_drug_interaction',
@@ -136,6 +152,7 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
             parameters: {
               type: 'object',
               properties: {
+                patient_name: { type: 'string', description: 'Patient name' },
                 chief_complaint: { type: 'string' },
                 pain_scale: { type: 'number' },
                 onset: { type: 'string' },
@@ -143,6 +160,18 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
                 allergies: { type: 'array', items: { type: 'string' } }
               },
               required: ['chief_complaint']
+            }
+          },
+          {
+            type: 'function',
+            name: 'confirm_and_close_session',
+            description: 'Call this tool to deliver final closing confirmation to the patient and automatically terminate the audio session.',
+            parameters: {
+              type: 'object',
+              properties: {
+                closing_summary: { type: 'string', description: 'Closing verbal reassurance statement spoken to patient' }
+              },
+              required: ['closing_summary']
             }
           }
         ]
@@ -202,6 +231,14 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
           break;
 
         case 'reply.done':
+          if (this.shouldAutoClose) {
+            this.callbacks.onAutoClose?.('Patient intake completed and confirmed.');
+            // Allow audio player to finish playing the closing confirmation audio
+            setTimeout(() => {
+              this.disconnect();
+            }, 2200);
+            return;
+          }
           if (msg.status === 'interrupted') {
             // User barge-in! Flush playback audio immediately
             this.player?.stopAndFlush();
@@ -234,7 +271,13 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
     let result: any = { status: 'ok' };
     let status: 'completed' | 'flagged' = 'completed';
 
-    if (name === 'check_drug_interaction') {
+    if (name === 'set_patient_identity') {
+      result = {
+        status: 'ok',
+        patient_name: args.patient_name,
+        message: `Patient chart updated to ${args.patient_name}`
+      };
+    } else if (name === 'check_drug_interaction') {
       const { medication_a, medication_b } = args;
       const interactions = checkDrugInteractions([medication_a, medication_b]);
       result = {
@@ -256,6 +299,13 @@ Speak in clear, concise, reassuring sentences. Keep responses brief (1-3 sentenc
       result = {
         record_id: `INTAKE-${Date.now().toString().slice(-4)}`,
         saved_to_ehr: true
+      };
+    } else if (name === 'confirm_and_close_session') {
+      this.shouldAutoClose = true;
+      result = {
+        status: 'intake_confirmed',
+        session_closing: true,
+        summary: args.closing_summary
       };
     }
 

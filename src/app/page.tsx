@@ -295,6 +295,34 @@ export default function MediScribeConsole() {
     setTimeout(() => setShiftAlertMessage(null), 5000);
   };
 
+  // Helper to extract spoken patient names from voice transcription
+  const extractSpokenPatientName = (text: string): string | null => {
+    const patterns = [
+      /(?:my name is|i am|i'm|name is|call me|this is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i,
+      /(?:patient name is|patient is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i
+    ];
+    for (const pat of patterns) {
+      const match = text.match(pat);
+      if (match && match[1]) {
+        const candidate = match[1].trim();
+        const lower = candidate.toLowerCase();
+        const forbidden = [
+          'having', 'feeling', 'in', 'here', 'hurting', 'sick', 'not', 'fine', 'good',
+          'experiencing', 'suffering', 'a', 'an', 'the', 'sorry', 'okay', 'ready', 'just',
+          'waiting', 'severe', 'all', 'new', 'no', 'yes', 'going', 'doing', 'dying', 'chest', 'back', 'pain'
+        ];
+        const firstWord = lower.split(/\s+/)[0];
+        if (!forbidden.includes(firstWord) && candidate.length >= 2) {
+          return candidate
+            .split(/\s+/)
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ');
+        }
+      }
+    }
+    return null;
+  };
+
   // 1. Toggle Voice Agent (Bedside Triage)
   const handleToggleVoiceAgent = async () => {
     if (voiceStatus !== 'disconnected') {
@@ -307,6 +335,11 @@ export default function MediScribeConsole() {
       voiceClientRef.current = new VoiceAgentClient({
         onStatusChange: (status) => setVoiceStatus(status as any),
         onVolumeChange: (vol) => setVolume(vol),
+        onAutoClose: (reason) => {
+          setVoiceStatus('disconnected');
+          setShiftAlertMessage(reason || 'Patient intake concluded. Voice session confirmed and closed automatically.');
+          setTimeout(() => setShiftAlertMessage(null), 6000);
+        },
         onUserTranscript: (text, isFinal) => {
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.voiceDialogue];
@@ -329,6 +362,8 @@ export default function MediScribeConsole() {
               });
             }
 
+            let newPatientName = prev.patientName;
+            let newAge = prev.age;
             let newChiefComplaint = prev.chiefComplaint;
             let newPainScale = prev.painScale;
             let newEsiScore = prev.esiScore;
@@ -344,10 +379,28 @@ export default function MediScribeConsole() {
                 const calculated = calculateEsiScore(text, newPainScale, prev.patientVitals);
                 newEsiScore = calculated.score;
               }
+
+              // Extract spoken patient name
+              const extractedName = extractSpokenPatientName(text);
+              if (extractedName && (prev.patientName.startsWith('Patient') || prev.patientName.startsWith('Walk-in') || prev.patientName !== extractedName)) {
+                newPatientName = extractedName;
+                setShiftAlertMessage(`Active demographics updated: Patient identified as ${extractedName}`);
+              }
+
+              // Extract spoken age if stated
+              const ageMatch = text.match(/\b(?:i'm|i am|age is|aged?)\s*(\d{1,2})\b/i);
+              if (ageMatch) {
+                const parsedAge = parseInt(ageMatch[1], 10);
+                if (parsedAge > 0 && parsedAge < 125) {
+                  newAge = parsedAge;
+                }
+              }
             }
 
             return {
               ...prev,
+              patientName: newPatientName,
+              age: newAge,
               voiceDialogue: currentDialogue,
               chiefComplaint: newChiefComplaint,
               painScale: newPainScale,
@@ -386,8 +439,41 @@ export default function MediScribeConsole() {
           updateActiveEncounter(prev => {
             const updatedEvents = [event, ...prev.toolEvents];
             let newAlert = prev.criticalAlert;
+            let newPatientName = prev.patientName;
+            let newAge = prev.age;
+            let newChiefComplaint = prev.chiefComplaint;
+            let newPainScale = prev.painScale;
+            let newMeds = [...prev.patientMeds];
+            let newStatus = prev.status;
+            let newCompletedAt = prev.completedAt;
 
-            if (event.toolName === 'flag_critical_vital' || event.status === 'flagged') {
+            if (event.toolName === 'set_patient_identity') {
+              const confirmedName = event.parameters?.patient_name || event.result?.patient_name;
+              if (confirmedName && typeof confirmedName === 'string') {
+                newPatientName = confirmedName;
+                setShiftAlertMessage(`Patient demographics verified by voice agent: ${confirmedName}`);
+              }
+              if (event.parameters?.age) {
+                newAge = Number(event.parameters.age);
+              }
+            } else if (event.toolName === 'record_patient_intake') {
+              if (event.parameters?.patient_name) {
+                newPatientName = event.parameters.patient_name;
+              }
+              if (event.parameters?.chief_complaint) {
+                newChiefComplaint = event.parameters.chief_complaint;
+              }
+              if (event.parameters?.pain_scale) {
+                newPainScale = Number(event.parameters.pain_scale);
+              }
+              if (Array.isArray(event.parameters?.medications) && event.parameters.medications.length > 0) {
+                newMeds = Array.from(new Set([...prev.patientMeds, ...event.parameters.medications]));
+              }
+            } else if (event.toolName === 'confirm_and_close_session') {
+              setShiftAlertMessage(`Intake confirmed by clinical agent. Closing voice session automatically.`);
+              newStatus = 'Completed';
+              newCompletedAt = new Date().toLocaleTimeString();
+            } else if (event.toolName === 'flag_critical_vital' || event.status === 'flagged') {
               newAlert = event.toolName === 'check_drug_interaction'
                 ? 'Severe Medication Contraindication Detected: Immediate Clinical Action Required'
                 : 'Priority Triage Flag: Acute Symptom Severity Escalation';
@@ -395,6 +481,13 @@ export default function MediScribeConsole() {
 
             return {
               ...prev,
+              patientName: newPatientName,
+              age: newAge,
+              chiefComplaint: newChiefComplaint,
+              painScale: newPainScale,
+              patientMeds: newMeds,
+              status: newStatus,
+              completedAt: newCompletedAt,
               toolEvents: updatedEvents,
               criticalAlert: newAlert
             };
@@ -463,13 +556,28 @@ export default function MediScribeConsole() {
 
     const combinedTranscript = sourceDialogue.map((d) => `${d.speaker}: ${d.text}`).join('\n');
 
+    const clinicalFallback = `Patient: ${activeEncounter.patientName} (${activeEncounter.age}YO ${activeEncounter.gender})
+Bed/Location: ${activeEncounter.bed} • MRN: ${activeEncounter.mrn}
+Chief Complaint: ${activeEncounter.chiefComplaint}
+Acuity Level: ${activeEncounter.esiScore}
+Pain Score: ${activeEncounter.painScale}/10
+Reconciled Medications: ${activeEncounter.patientMeds.join(', ') || 'None reported'}
+Vitals:
+${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`).join('\n')}`;
+
+    const effectiveTranscript = combinedTranscript.trim().length > 0
+      ? combinedTranscript
+      : clinicalFallback;
+
     try {
       const res = await fetch('/api/soap/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript: combinedTranscript || `Patient ${activeEncounter.patientName} presents with: ${activeEncounter.chiefComplaint}`,
+          transcript: effectiveTranscript,
           patientName: activeEncounter.patientName,
+          age: activeEncounter.age,
+          gender: activeEncounter.gender,
           chiefComplaint: activeEncounter.chiefComplaint,
           painScale: activeEncounter.painScale,
           medications: activeEncounter.patientMeds,
@@ -1013,7 +1121,7 @@ export default function MediScribeConsole() {
                     </span>
                     <button
                       onClick={handleGenerateSoapNote}
-                      disabled={activeEncounter.voiceDialogue.length === 0 || isGeneratingSoap}
+                      disabled={isGeneratingSoap}
                       className="btn-hardware px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
                     >
                       {isGeneratingSoap ? 'Compiling SOAP...' : 'Compile SOAP Documentation'}
@@ -1102,7 +1210,7 @@ export default function MediScribeConsole() {
                     </span>
                     <button
                       onClick={handleGenerateSoapNote}
-                      disabled={activeEncounter.scribeDialogue.length === 0 || isGeneratingSoap}
+                      disabled={isGeneratingSoap}
                       className="btn-hardware px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
                     >
                       {isGeneratingSoap ? 'Compiling SOAP...' : 'Compile SOAP Documentation'}
