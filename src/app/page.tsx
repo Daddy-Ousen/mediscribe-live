@@ -8,7 +8,6 @@ import { ToolCallBadge } from '@/components/ToolCallBadge';
 import { SoapNoteViewer } from '@/components/SoapNoteViewer';
 import { TriageCard } from '@/components/TriageCard';
 import { DialogueTurn, ToolExecutionEvent, SoapNote, TriageSeverity, PatientEncounter } from '@/types/clinical';
-import { SIMULATION_CASES, SimulationCase } from '@/lib/clinical/simulation-cases';
 import { checkDrugInteractions, calculateEsiScore } from '@/lib/clinical/drug-database';
 import {
   Mic,
@@ -22,6 +21,7 @@ import {
   ShieldAlert,
   User,
   UserPlus,
+  UserMinus,
   ArrowRight,
   CheckCheck,
   Clock,
@@ -34,82 +34,30 @@ import {
 
 const INITIAL_ENCOUNTERS: PatientEncounter[] = [
   {
-    id: 'enc-849201',
-    mrn: 'MRN-849201',
-    bed: 'BAY 4',
-    patientName: 'Robert Vance',
-    age: 64,
-    gender: 'Male',
-    status: 'In Triage',
-    chiefComplaint: 'Substernal chest pressure radiating to left arm (9/10 pain)',
-    painScale: 9,
-    esiScore: 'ESI-2 Emergent',
-    patientMeds: ['Warfarin 5mg daily', 'Aspirin 81mg chewable', 'Atorvastatin 40mg'],
-    patientVitals: {
-      'Blood Pressure': '164/98 mmHg',
-      'Heart Rate': '94 bpm',
-      'SpO2': '96% on room air',
-      'Temperature': '98.6°F',
-      'Respiratory Rate': '20/min'
-    },
-    voiceDialogue: [],
-    scribeDialogue: [],
-    toolEvents: [],
-    criticalAlert: null,
-    soapNote: null,
-    createdAt: '14:00:00'
-  },
-  {
-    id: 'enc-593021',
-    mrn: 'MRN-593021',
-    bed: 'BAY 2',
-    patientName: 'David Miller',
-    age: 58,
-    gender: 'Male',
-    status: 'Awaiting Provider',
-    chiefComplaint: 'Acute ischemic chest tightness; undisclosed Sildenafil ingestion',
-    painScale: 7,
-    esiScore: 'ESI-1 Resuscitation',
-    patientMeds: ['Sildenafil 50mg PRN', 'Nitroglycerin 0.4mg SL PRN', 'Metformin 500mg'],
-    patientVitals: {
-      'Blood Pressure': '138/84 mmHg',
-      'Heart Rate': '82 bpm',
-      'SpO2': '98%',
-      'Temperature': '98.4°F',
-      'Respiratory Rate': '18/min'
-    },
-    voiceDialogue: [],
-    scribeDialogue: [],
-    toolEvents: [],
-    criticalAlert: null,
-    soapNote: null,
-    createdAt: '10:10:00'
-  },
-  {
-    id: 'enc-319482',
-    mrn: 'MRN-319482',
+    id: 'enc-101',
+    mrn: 'MRN-48201',
     bed: 'BAY 1',
-    patientName: 'Eleanor Vance',
-    age: 71,
-    gender: 'Female',
+    patientName: 'Patient Intake #1',
+    age: 0,
+    gender: 'Pending',
     status: 'In Triage',
-    chiefComplaint: 'Symptomatic bradycardia & palpitations after OTC potassium supplements',
-    painScale: 3,
-    esiScore: 'ESI-3 Urgent',
-    patientMeds: ['Lisinopril 20mg daily', 'Potassium Chloride 20mEq', 'Hydrochlorothiazide 25mg'],
+    chiefComplaint: 'Awaiting bedside voice triage intake',
+    painScale: 0,
+    esiScore: 'ESI-4 Less Urgent',
+    patientMeds: [],
     patientVitals: {
-      'Blood Pressure': '152/90 mmHg',
-      'Heart Rate': '54 bpm (Bradycardic)',
-      'SpO2': '97%',
-      'Temperature': '98.7°F',
-      'Respiratory Rate': '16/min'
+      'Blood Pressure': '--/--',
+      'Heart Rate': '-- bpm',
+      'SpO2': '--%',
+      'Temperature': '--°F',
+      'Respiratory Rate': '--/min'
     },
     voiceDialogue: [],
     scribeDialogue: [],
     toolEvents: [],
     criticalAlert: null,
     soapNote: null,
-    createdAt: '11:15:00'
+    createdAt: '12:00:00'
   }
 ];
 
@@ -139,9 +87,6 @@ export default function MediScribeConsole() {
   const [drugA, setDrugA] = useState('Warfarin');
   const [drugB, setDrugB] = useState('Aspirin');
   const [drugResult, setDrugResult] = useState<any>(null);
-
-  // Simulation Running State
-  const [activeSimulationId, setActiveSimulationId] = useState<string | null>(null);
 
   // Client references
   const voiceClientRef = useRef<VoiceAgentClient | null>(null);
@@ -218,20 +163,20 @@ export default function MediScribeConsole() {
         id: newId,
         mrn: newMrn,
         bed: `BAY ${nextBedNum}`,
-        patientName: `Walk-in Patient #${nextBedNum}`,
-        age: 45,
-        gender: 'Unspecified',
+        patientName: `Patient Intake #${nextBedNum}`,
+        age: 0,
+        gender: 'Pending',
         status: 'In Triage',
-        chiefComplaint: 'New triage registration',
+        chiefComplaint: 'Awaiting bedside voice triage intake',
         painScale: 0,
         esiScore: 'ESI-4 Less Urgent',
         patientMeds: [],
         patientVitals: {
-          'Blood Pressure': '120/80 mmHg',
-          'Heart Rate': '72 bpm',
-          'SpO2': '99%',
-          'Temperature': '98.6°F',
-          'Respiratory Rate': '16/min'
+          'Blood Pressure': '--/--',
+          'Heart Rate': '-- bpm',
+          'SpO2': '--%',
+          'Temperature': '--°F',
+          'Respiratory Rate': '--/min'
         },
         voiceDialogue: [],
         scribeDialogue: [],
@@ -242,7 +187,7 @@ export default function MediScribeConsole() {
       };
       setEncounters(prev => [...prev, newEncounter]);
       setActivePatientId(newId);
-      setShiftAlertMessage(`All queued encounters completed! Created new triage intake for ${newEncounter.patientName} (${newEncounter.bed}).`);
+      setShiftAlertMessage(`Created new triage intake for ${newEncounter.patientName} (${newEncounter.bed}).`);
     }
 
     setTimeout(() => setShiftAlertMessage(null), 6000);
@@ -267,19 +212,19 @@ export default function MediScribeConsole() {
       mrn: newMrn,
       bed: `BAY ${nextBedNum}`,
       patientName: `Patient Intake #${nextBedNum}`,
-      age: 50,
-      gender: 'Pending Intake',
+      age: 0,
+      gender: 'Pending',
       status: 'In Triage',
-      chiefComplaint: 'Awaiting initial patient presentation',
+      chiefComplaint: 'Awaiting bedside voice triage intake',
       painScale: 0,
       esiScore: 'ESI-4 Less Urgent',
       patientMeds: [],
       patientVitals: {
-        'Blood Pressure': '124/82 mmHg',
-        'Heart Rate': '76 bpm',
-        'SpO2': '98%',
-        'Temperature': '98.6°F',
-        'Respiratory Rate': '16/min'
+        'Blood Pressure': '--/--',
+        'Heart Rate': '-- bpm',
+        'SpO2': '--%',
+        'Temperature': '--°F',
+        'Respiratory Rate': '--/min'
       },
       voiceDialogue: [],
       scribeDialogue: [],
@@ -293,6 +238,53 @@ export default function MediScribeConsole() {
     setActivePatientId(newId);
     setShiftAlertMessage(`New patient encounter initialized (${newEncounter.bed}). All channels cleared for intake.`);
     setTimeout(() => setShiftAlertMessage(null), 5000);
+  };
+
+  // Discharge / Dismiss Encounter from Roster & Ledger
+  const handleDismissPatient = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (encounters.length <= 1) {
+      const resetId = `enc-${Date.now().toString().slice(-6)}`;
+      const cleanEncounter: PatientEncounter = {
+        id: resetId,
+        mrn: `MRN-${Math.floor(100000 + Math.random() * 900000)}`,
+        bed: 'BAY 1',
+        patientName: 'Patient Intake #1',
+        age: 0,
+        gender: 'Pending',
+        status: 'In Triage',
+        chiefComplaint: 'Awaiting bedside voice triage intake',
+        painScale: 0,
+        esiScore: 'ESI-4 Less Urgent',
+        patientMeds: [],
+        patientVitals: {
+          'Blood Pressure': '--/--',
+          'Heart Rate': '-- bpm',
+          'SpO2': '--%',
+          'Temperature': '--°F',
+          'Respiratory Rate': '--/min'
+        },
+        voiceDialogue: [],
+        scribeDialogue: [],
+        toolEvents: [],
+        criticalAlert: null,
+        soapNote: null,
+        createdAt: new Date().toLocaleTimeString()
+      };
+      setEncounters([cleanEncounter]);
+      setActivePatientId(resetId);
+      setShiftAlertMessage('Patient queue reset to clean intake.');
+      setTimeout(() => setShiftAlertMessage(null), 4000);
+      return;
+    }
+
+    const remaining = encounters.filter(enc => enc.id !== id);
+    setEncounters(remaining);
+    if (activePatientId === id) {
+      setActivePatientId(remaining[0].id);
+    }
+    setShiftAlertMessage('Patient encounter discharged from active queue.');
+    setTimeout(() => setShiftAlertMessage(null), 4000);
   };
 
   // Helper to extract spoken patient names from voice transcription
@@ -606,130 +598,6 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
     }
   };
 
-  // 4. Run Simulation Case for a Specific Patient Dossier
-  const handleRunSimulation = (simCase: SimulationCase) => {
-    // Find matching encounter or switch/create matching
-    let targetEncounter = encounters.find(e => e.patientName.toLowerCase() === simCase.patientName.toLowerCase());
-
-    if (!targetEncounter) {
-      // Create new encounter matching this simulation
-      const newId = `enc-sim-${Date.now().toString().slice(-4)}`;
-      const newMrn = `MRN-${Math.floor(100000 + Math.random() * 900000)}`;
-      targetEncounter = {
-        id: newId,
-        mrn: newMrn,
-        bed: `BAY ${encounters.length + 1}`,
-        patientName: simCase.patientName,
-        age: simCase.age,
-        gender: simCase.gender,
-        status: 'In Triage',
-        chiefComplaint: simCase.description,
-        painScale: simCase.vitals['Pain Scale'] ? parseInt(simCase.vitals['Pain Scale']) || 8 : 8,
-        esiScore: simCase.severityBadge.includes('ESI-1') ? 'ESI-1 Resuscitation' : simCase.severityBadge.includes('ESI-2') ? 'ESI-2 Emergent' : 'ESI-3 Urgent',
-        patientMeds: simCase.medications,
-        patientVitals: simCase.vitals,
-        voiceDialogue: [],
-        scribeDialogue: [],
-        toolEvents: [],
-        criticalAlert: null,
-        soapNote: null,
-        createdAt: new Date().toLocaleTimeString()
-      };
-      setEncounters(prev => [...prev, targetEncounter!]);
-      setActivePatientId(newId);
-    } else {
-      setActivePatientId(targetEncounter.id);
-      // Clean target encounter dialogue and alerts to re-run freshly
-      setEncounters(prev => prev.map(enc => {
-        if (enc.id === targetEncounter!.id) {
-          return {
-            ...enc,
-            voiceDialogue: [],
-            toolEvents: [],
-            criticalAlert: null
-          };
-        }
-        return enc;
-      }));
-    }
-
-    setActiveSimulationId(simCase.id);
-    setCockpitMode('voice-agent');
-
-    // Scroll up to cockpit so user watches live execution
-    const cockpitElem = document.getElementById('cockpit');
-    if (cockpitElem) {
-      cockpitElem.scrollIntoView({ behavior: 'smooth' });
-    }
-
-    let currentStep = 0;
-    const interval = setInterval(() => {
-      if (currentStep < simCase.dialogue.length) {
-        const turn = simCase.dialogue[currentStep];
-
-        setEncounters(prevList => prevList.map(enc => {
-          if (enc.id === targetEncounter!.id) {
-            const updatedDialogue = [...enc.voiceDialogue, turn];
-            const updatedTools = [...enc.toolEvents];
-            let alertText = enc.criticalAlert;
-            let pain = enc.painScale;
-            let esi = enc.esiScore;
-
-            if (turn.text.toLowerCase().includes('warfarin') && turn.text.toLowerCase().includes('aspirin')) {
-              const interactions = checkDrugInteractions(['Warfarin', 'Aspirin']);
-              updatedTools.unshift({
-                id: `sim-tool-${Date.now()}`,
-                toolName: 'check_drug_interaction',
-                parameters: { medication_a: 'Warfarin 5mg', medication_b: 'Aspirin 81mg' },
-                result: { details: interactions },
-                timestamp: new Date().toLocaleTimeString(),
-                status: 'flagged'
-              });
-              alertText = 'CONTRAINDICATION DETECTED: Concomitant Warfarin and Aspirin amplify hemorrhage hazard.';
-            } else if (turn.text.toLowerCase().includes('sildenafil') && turn.text.toLowerCase().includes('nitroglycerin')) {
-              const interactions = checkDrugInteractions(['Sildenafil', 'Nitroglycerin']);
-              updatedTools.unshift({
-                id: `sim-tool-${Date.now()}`,
-                toolName: 'check_drug_interaction',
-                parameters: { medication_a: 'Sildenafil 50mg', medication_b: 'Nitroglycerin 0.4mg' },
-                result: { details: interactions },
-                timestamp: new Date().toLocaleTimeString(),
-                status: 'flagged'
-              });
-              alertText = 'LETHAL CONTRAINDICATION: Absolute avoidance of nitrates within 48h of PDE-5 inhibitors.';
-            } else if (turn.text.includes('9 out of 10') || turn.text.includes('chest pain')) {
-              pain = 9;
-              esi = 'ESI-2 Emergent';
-              updatedTools.unshift({
-                id: `sim-tool-vital-${Date.now()}`,
-                toolName: 'flag_critical_vital',
-                parameters: { symptom_or_vital: 'Crushing chest pain (9/10)', severity_level: 'emergent' },
-                result: { alert_triggered: true },
-                timestamp: new Date().toLocaleTimeString(),
-                status: 'flagged'
-              });
-            }
-
-            return {
-              ...enc,
-              voiceDialogue: updatedDialogue,
-              toolEvents: updatedTools,
-              criticalAlert: alertText,
-              painScale: pain,
-              esiScore: esi
-            };
-          }
-          return enc;
-        }));
-
-        currentStep++;
-      } else {
-        clearInterval(interval);
-        setActiveSimulationId(null);
-      }
-    }, 1200);
-  };
-
   const handleCheckDrugs = () => {
     const res = checkDrugInteractions([drugA, drugB]);
     setDrugResult({
@@ -759,7 +627,6 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
           <a href="#roster" className="hover:text-emerald-400 transition-colors">Patient Queue ({encounters.length})</a>
           <a href="#cockpit" className="hover:text-emerald-400 transition-colors">Cockpit</a>
           <a href="#records" className="hover:text-emerald-400 transition-colors">Shift Ledger</a>
-          <a href="#dossiers" className="hover:text-emerald-400 transition-colors">Dossiers</a>
           <a href="#soap" className="hover:text-emerald-400 transition-colors">SOAP &amp; FHIR</a>
           <a href="#rxnorm" className="hover:text-emerald-400 transition-colors">Pharmacology</a>
         </div>
@@ -821,11 +688,11 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
             <span>+ New Patient Intake</span>
           </button>
           <a
-            href="#dossiers"
+            href="#records"
             className="btn-hardware px-6 py-3 bg-console-elevated hover:bg-console-highlight border border-console-border text-slate-200 uppercase tracking-wider rounded-lg flex items-center gap-2"
           >
-            <Play className="w-3.5 h-3.5 text-amber-400" />
-            <span>Run Simulation Dossier</span>
+            <Archive className="w-3.5 h-3.5 text-amber-400" />
+            <span>Shift Records Ledger</span>
           </a>
         </div>
 
@@ -973,7 +840,9 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                 </div>
                 <div className="text-lg font-bold text-slate-100 flex items-center gap-2">
                   <span>{activeEncounter.patientName}</span>
-                  <span className="text-xs text-slate-400 font-normal font-mono">({activeEncounter.age}YO {activeEncounter.gender})</span>
+                  <span className="text-xs text-slate-400 font-normal font-mono">
+                    {activeEncounter.age > 0 ? `(${activeEncounter.age}YO ${activeEncounter.gender})` : '(Demographics Pending)'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -994,6 +863,15 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>New Intake</span>
+              </button>
+
+              <button
+                onClick={() => handleDismissPatient(activeEncounter.id)}
+                className="btn-hardware px-3 py-2 bg-obsidian-500 hover:bg-rose-950/60 hover:text-rose-400 border border-console-border text-slate-400 font-semibold uppercase tracking-wider rounded-lg flex items-center gap-1.5 transition-colors"
+                title="Discharge current encounter"
+              >
+                <UserMinus className="w-3.5 h-3.5" />
+                <span>Discharge</span>
               </button>
             </div>
           </div>
@@ -1088,7 +966,7 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                         <Terminal className="w-6 h-6 mb-2 text-slate-600" />
                         <p className="text-xs font-bold text-slate-400">Dialogue channel ready for {activeEncounter.patientName}.</p>
                         <p className="text-[11px] text-slate-600 mt-1 max-w-sm font-sans">
-                          Click &quot;Initialize Voice Triage&quot; to begin microphone stream, or select a simulation dossier below. All recordings and tools attach cleanly to {activeEncounter.mrn}.
+                          Click &quot;Initialize Voice Triage&quot; to begin live bedside microphone intake. Transcripts, clinical flags, and SOAP documentation attach cleanly to {activeEncounter.mrn}.
                         </p>
                       </div>
                     ) : (
@@ -1406,20 +1284,29 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                           )}
                         </td>
                         <td className="p-3.5 text-right">
-                          <button
-                            onClick={() => {
-                              handleSelectPatient(enc.id);
-                              const cp = document.getElementById('cockpit');
-                              if (cp) cp.scrollIntoView({ behavior: 'smooth' });
-                            }}
-                            className={`btn-hardware px-3 py-1 rounded text-[11px] font-bold uppercase tracking-wider ${
-                              isSelected
-                                ? 'bg-emerald-500 text-slate-950'
-                                : 'bg-obsidian-500 hover:bg-console-highlight border border-console-border text-slate-300'
-                            }`}
-                          >
-                            {isSelected ? 'Active' : 'Open'}
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => {
+                                handleSelectPatient(enc.id);
+                                const cp = document.getElementById('cockpit');
+                                if (cp) cp.scrollIntoView({ behavior: 'smooth' });
+                              }}
+                              className={`btn-hardware px-3 py-1 rounded text-[11px] font-bold uppercase tracking-wider ${
+                                isSelected
+                                  ? 'bg-emerald-500 text-slate-950'
+                                  : 'bg-obsidian-500 hover:bg-console-highlight border border-console-border text-slate-300'
+                              }`}
+                            >
+                              {isSelected ? 'Active' : 'Open'}
+                            </button>
+                            <button
+                              onClick={(e) => handleDismissPatient(enc.id, e)}
+                              title="Discharge encounter from queue"
+                              className="btn-hardware p-1.5 bg-obsidian-500 hover:bg-rose-950/60 hover:text-rose-400 border border-console-border text-slate-500 rounded transition-colors"
+                            >
+                              <UserMinus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1639,64 +1526,12 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
         </div>
       </section>
 
-      {/* JUDGE DOSSIERS SANDBOX ROOM */}
-      <section id="dossiers" className="py-20 sm:py-28 border-t border-console-border bg-obsidian-300/40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="mb-10">
-            <div className="font-mono text-[11px] text-amber-400 uppercase font-bold tracking-wider">
-              CHAPTER 03 / EVALUATION MATRIX
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
-              Judge Simulation Dossiers
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl font-sans leading-relaxed">
-              Evaluate the end-to-end voice pipeline, tool calls, and SOAP compilation with zero setup. Selecting a dossier loads the patient into the shift roster, streams dialogue into the cockpit, and records an isolated clinical encounter.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 font-mono text-xs">
-            {SIMULATION_CASES.map((sc) => (
-              <div
-                key={sc.id}
-                className="bg-console-surface border border-console-border rounded-xl p-5 flex flex-col justify-between space-y-5 hover:border-emerald-500/40 transition-colors"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-slate-500 uppercase font-semibold">{sc.category}</span>
-                    <span className="px-2 py-0.5 bg-obsidian-500 border border-console-border text-amber-400 font-bold rounded">
-                      {sc.severityBadge}
-                    </span>
-                  </div>
-                  <h3 className="font-bold text-slate-100 text-sm font-sans leading-snug">{sc.title}</h3>
-                  <p className="text-xs text-slate-400 font-sans leading-relaxed">{sc.description}</p>
-
-                  <div className="p-3 bg-obsidian-500 rounded border border-console-border/60 text-[11px] space-y-1.5 text-slate-400">
-                    <div>PATIENT: <span className="text-slate-200">{sc.patientName}, {sc.age}YO</span></div>
-                    <div>MEDICATIONS: <span className="text-amber-300">{sc.medications.join(' • ')}</span></div>
-                    <div>VITALS: <span className="text-slate-300">{sc.vitals['Blood Pressure']} • {sc.vitals['Heart Rate']}</span></div>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => handleRunSimulation(sc)}
-                  disabled={activeSimulationId !== null}
-                  className="btn-hardware w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 disabled:opacity-40"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>{activeSimulationId === sc.id ? 'Streaming Case...' : 'Execute Dossier'}</span>
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ACTION: CLINICAL SOAP DOCUMENTATION & FHIR V4 */}
       <section id="soap" className="py-20 sm:py-28 border-t border-console-border max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
         <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
             <div className="font-mono text-[11px] text-emerald-400 uppercase font-bold tracking-wider">
-              CHAPTER 04 / CLINICAL OUTPUT
+              CHAPTER 03 / CLINICAL OUTPUT
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
               Automated SOAP Synthesis &amp; HL7 FHIR v4: {activeEncounter.patientName}

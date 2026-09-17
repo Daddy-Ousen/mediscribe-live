@@ -5,7 +5,7 @@ import { checkDrugInteractions, calculateEsiScore } from '@/lib/clinical/drug-da
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { transcript, patientName = 'John Doe', age = 58, gender = 'Male', chiefComplaint = '', painScale = 0, medications = [], vitals = {} } = body;
+    const { transcript, patientName = 'Patient', age = 0, gender = 'Unspecified', chiefComplaint = '', painScale = 0, medications = [], vitals = {} } = body;
 
     const apiKey = process.env.ASSEMBLYAI_API_KEY;
 
