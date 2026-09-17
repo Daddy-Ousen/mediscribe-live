@@ -91,11 +91,21 @@ export default function MediScribeConsole() {
   // Client references
   const voiceClientRef = useRef<VoiceAgentClient | null>(null);
   const scribeClientRef = useRef<StreamingTranscriptionClient | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const voiceFeedRef = useRef<HTMLDivElement | null>(null);
+  const scribeFeedRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll ONLY internal feed boxes to the latest speech turn (prevents browser window from scrolling)
+  useEffect(() => {
+    if (cockpitMode === 'voice-agent' && voiceFeedRef.current) {
+      voiceFeedRef.current.scrollTop = voiceFeedRef.current.scrollHeight;
+    }
+  }, [activeEncounter?.voiceDialogue, cockpitMode]);
 
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeEncounter?.voiceDialogue, activeEncounter?.scribeDialogue]);
+    if (cockpitMode === 'ambient-scribe' && scribeFeedRef.current) {
+      scribeFeedRef.current.scrollTop = scribeFeedRef.current.scrollHeight;
+    }
+  }, [activeEncounter?.scribeDialogue, cockpitMode]);
 
   useEffect(() => {
     return () => {
@@ -994,7 +1004,7 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                   <AudioWaveform status={voiceStatus} volume={volume} sampleRate={24000} />
 
                   {/* Live Dialogue Stream Feed */}
-                  <div className="bg-obsidian-500 border border-console-border rounded-lg p-4 h-80 overflow-y-auto space-y-3 font-mono text-xs">
+                  <div ref={voiceFeedRef} className="bg-obsidian-500 border border-console-border rounded-lg p-4 h-80 overflow-y-auto space-y-3 font-mono text-xs">
                     {activeEncounter.voiceDialogue.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
                         <Terminal className="w-6 h-6 mb-2 text-slate-600" />
@@ -1023,7 +1033,6 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                         </div>
                       ))
                     )}
-                    <div ref={transcriptEndRef} />
                   </div>
 
                   {/* Compile Action Bar */}
@@ -1083,7 +1092,7 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                   <AudioWaveform status={scribeStatus} volume={volume} sampleRate={16000} />
 
                   {/* Scribing Feed */}
-                  <div className="bg-obsidian-500 border border-console-border rounded-lg p-4 h-80 overflow-y-auto space-y-3 font-mono text-xs">
+                  <div ref={scribeFeedRef} className="bg-obsidian-500 border border-console-border rounded-lg p-4 h-80 overflow-y-auto space-y-3 font-mono text-xs">
                     {activeEncounter.scribeDialogue.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
                         <Radio className="w-6 h-6 mb-2 text-slate-600" />
@@ -1112,7 +1121,6 @@ ${Object.entries(activeEncounter.patientVitals).map(([k, v]) => `• ${k}: ${v}`
                         </div>
                       ))
                     )}
-                    <div ref={transcriptEndRef} />
                   </div>
 
                   {/* Compile Action Bar */}
