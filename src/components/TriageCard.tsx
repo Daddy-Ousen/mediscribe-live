@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { TriageSeverity } from '@/types/clinical';
-import { ShieldAlert, AlertCircle, Activity, Heart, Wind, Thermometer, Radio } from 'lucide-react';
+import { ShieldAlert, AlertCircle, Activity, Heart, Wind, Thermometer } from 'lucide-react';
 
 interface TriageCardProps {
   esi: TriageSeverity;
@@ -23,6 +23,18 @@ export const TriageCard: React.FC<TriageCardProps> = ({
   const isEsi2 = esi.includes('ESI-2');
   const isUrgent = isEsi1 || isEsi2;
 
+  const bp = vitals['Blood Pressure'] || '--/--';
+  const hr = vitals['Heart Rate'] || '-- bpm';
+  const spo2 = vitals['SpO2'] || '--%';
+  const rr = vitals['Respiratory Rate'] || '--/min';
+  const temp = vitals['Temperature'] || '--°F';
+
+  const isBpSet = bp !== '--/--' && bp !== '--';
+  const isHrSet = hr !== '-- bpm' && hr !== '--';
+  const isSpo2Set = spo2 !== '--%' && spo2 !== '--';
+  const isRrSet = rr !== '--/min' && rr !== '--';
+  const isTempSet = temp !== '--°F' && temp !== '--';
+
   return (
     <div className="bg-console-surface border border-console-border rounded-xl p-4 font-mono space-y-4">
       {/* Triage Tier Bar */}
@@ -33,7 +45,7 @@ export const TriageCard: React.FC<TriageCardProps> = ({
             <span
               className={`px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${
                 isEsi1
-                  ? 'bg-red-500 text-white'
+                  ? 'bg-red-500 text-white animate-pulse'
                   : isEsi2
                   ? 'bg-amber-500 text-slate-950 font-black'
                   : 'bg-emerald-600 text-white'
@@ -48,8 +60,8 @@ export const TriageCard: React.FC<TriageCardProps> = ({
         <div className="text-right">
           <div className="text-[10px] text-slate-500 uppercase tracking-wider">Pain Intensity</div>
           <div className="text-base font-bold num-data text-slate-100 mt-0.5">
-            <span className={painScale >= 8 ? 'text-red-400 font-black' : 'text-slate-200'}>
-              {painScale}
+            <span className={painScale >= 8 ? 'text-red-400 font-black' : painScale > 0 ? 'text-amber-300' : 'text-slate-500'}>
+              {painScale > 0 ? painScale : '--'}
             </span>
             <span className="text-xs text-slate-500"> / 10</span>
           </div>
@@ -77,46 +89,87 @@ export const TriageCard: React.FC<TriageCardProps> = ({
 
       {/* Vitals Telemetry Matrix */}
       <div>
-        <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Physiological Telemetry</div>
+        <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-wider mb-2">
+          <span>Physiological Telemetry</span>
+          {(isBpSet || isHrSet || isSpo2Set || isRrSet || isTempSet) && (
+            <span className="text-emerald-400 text-[9px] font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+              LIVE TELEMETRY
+            </span>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="p-2.5 bg-obsidian-500 border border-console-border rounded-lg">
+          {/* Blood Pressure */}
+          <div className={`p-2.5 rounded-lg border transition-all ${
+            isBpSet ? 'bg-obsidian-500 border-rose-500/40' : 'bg-obsidian-500 border-console-border'
+          }`}>
             <div className="flex items-center justify-between text-slate-400 text-[10px] mb-1">
-              <span>BP / HEART RATE</span>
-              <Heart className="w-3 h-3 text-red-400" />
+              <span className="font-semibold uppercase">Blood Pressure</span>
+              <Heart className={`w-3.5 h-3.5 ${isBpSet ? 'text-rose-400' : 'text-slate-600'}`} />
             </div>
-            <div className="text-slate-100 font-bold num-data">
-              {vitals['Blood Pressure'] || '162/96'} <span className="text-slate-500 text-[10px]">MMHG</span> • {vitals['Heart Rate'] || '94'} <span className="text-slate-500 text-[10px]">BPM</span>
+            <div className={`font-bold num-data text-sm ${isBpSet ? 'text-slate-100' : 'text-slate-500'}`}>
+              {bp}
             </div>
           </div>
 
-          <div className="p-2.5 bg-obsidian-500 border border-console-border rounded-lg">
+          {/* Heart Rate */}
+          <div className={`p-2.5 rounded-lg border transition-all ${
+            isHrSet ? 'bg-obsidian-500 border-red-500/40' : 'bg-obsidian-500 border-console-border'
+          }`}>
             <div className="flex items-center justify-between text-slate-400 text-[10px] mb-1">
-              <span>SPO2 SATURATION</span>
-              <Wind className="w-3 h-3 text-cyan-400" />
+              <span className="font-semibold uppercase">Heart Rate</span>
+              <Activity className={`w-3.5 h-3.5 ${isHrSet ? 'text-red-400 animate-pulse' : 'text-slate-600'}`} />
             </div>
-            <div className="text-slate-100 font-bold num-data">
-              {vitals['SpO2'] || '96%'} <span className="text-slate-500 text-[10px]">ROOM AIR</span>
+            <div className={`font-bold num-data text-sm ${isHrSet ? 'text-slate-100' : 'text-slate-500'}`}>
+              {hr}
             </div>
           </div>
 
-          <div className="p-2.5 bg-obsidian-500 border border-console-border rounded-lg">
+          {/* SpO2 Saturation */}
+          <div className={`p-2.5 rounded-lg border transition-all ${
+            isSpo2Set ? 'bg-obsidian-500 border-cyan-500/40' : 'bg-obsidian-500 border-console-border'
+          }`}>
             <div className="flex items-center justify-between text-slate-400 text-[10px] mb-1">
-              <span>TEMPERATURE</span>
-              <Thermometer className="w-3 h-3 text-amber-400" />
+              <span className="font-semibold uppercase">SpO2</span>
+              <Wind className={`w-3.5 h-3.5 ${isSpo2Set ? 'text-cyan-400' : 'text-slate-600'}`} />
             </div>
-            <div className="text-slate-100 font-bold num-data">
-              {vitals['Temperature'] || '98.6°F'}
+            <div className={`font-bold num-data text-sm ${isSpo2Set ? 'text-slate-100' : 'text-slate-500'}`}>
+              {spo2}
             </div>
           </div>
 
-          <div className="p-2.5 bg-obsidian-500 border border-console-border rounded-lg">
+          {/* Respiratory Rate */}
+          <div className={`p-2.5 rounded-lg border transition-all ${
+            isRrSet ? 'bg-obsidian-500 border-teal-500/40' : 'bg-obsidian-500 border-console-border'
+          }`}>
             <div className="flex items-center justify-between text-slate-400 text-[10px] mb-1">
-              <span>RESPIRATORY RATE</span>
-              <Activity className="w-3 h-3 text-teal-400" />
+              <span className="font-semibold uppercase">Respiratory Rate</span>
+              <Activity className={`w-3.5 h-3.5 ${isRrSet ? 'text-teal-400' : 'text-slate-600'}`} />
             </div>
-            <div className="text-slate-100 font-bold num-data">
-              {vitals['Respiratory Rate'] || '20/MIN'}
+            <div className={`font-bold num-data text-sm ${isRrSet ? 'text-slate-100' : 'text-slate-500'}`}>
+              {rr}
             </div>
+          </div>
+
+          {/* Temperature (spans 2 columns) */}
+          <div className={`col-span-2 p-2.5 rounded-lg border transition-all flex items-center justify-between ${
+            isTempSet ? 'bg-obsidian-500 border-amber-500/40' : 'bg-obsidian-500 border-console-border'
+          }`}>
+            <div>
+              <div className="flex items-center gap-1.5 text-slate-400 text-[10px] mb-0.5">
+                <Thermometer className={`w-3.5 h-3.5 ${isTempSet ? 'text-amber-400' : 'text-slate-600'}`} />
+                <span className="font-semibold uppercase">Temperature</span>
+              </div>
+              <div className={`font-bold num-data text-sm ${isTempSet ? 'text-slate-100' : 'text-slate-500'}`}>
+                {temp}
+              </div>
+            </div>
+            {isTempSet && (
+              <span className="text-[10px] text-amber-400/80 font-mono">
+                {parseFloat(temp) >= 100.4 ? 'Febrile Elevation' : 'Normothermic'}
+              </span>
+            )}
           </div>
         </div>
       </div>

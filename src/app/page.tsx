@@ -9,6 +9,7 @@ import { SoapNoteViewer } from '@/components/SoapNoteViewer';
 import { TriageCard } from '@/components/TriageCard';
 import { DialogueTurn, ToolExecutionEvent, SoapNote, TriageSeverity, PatientEncounter } from '@/types/clinical';
 import { checkDrugInteractions, calculateEsiScore } from '@/lib/clinical/drug-database';
+import { extractVitalsFromText } from '@/lib/clinical/vitals-extractor';
 import {
   Mic,
   MicOff,
@@ -369,6 +370,7 @@ export default function MediScribeConsole() {
             let newChiefComplaint = prev.chiefComplaint;
             let newPainScale = prev.painScale;
             let newEsiScore = prev.esiScore;
+            let newVitals = { ...prev.patientVitals };
 
             if (isFinal) {
               const lower = text.toLowerCase();
@@ -378,8 +380,6 @@ export default function MediScribeConsole() {
               const painMatch = text.match(/\b([1-9]|10)\b/);
               if (painMatch && (lower.includes('pain') || lower.includes('scale') || lower.includes('out of 10'))) {
                 newPainScale = parseInt(painMatch[1]);
-                const calculated = calculateEsiScore(text, newPainScale, prev.patientVitals);
-                newEsiScore = calculated.score;
               }
 
               // Extract spoken patient name
@@ -397,6 +397,21 @@ export default function MediScribeConsole() {
                   newAge = parsedAge;
                 }
               }
+
+              // Extract spoken vitals
+              const vitalsResult = extractVitalsFromText(text, prev.patientVitals);
+              if (vitalsResult.hasUpdates) {
+                newVitals = vitalsResult.vitals;
+                if (vitalsResult.painScale !== undefined) {
+                  newPainScale = vitalsResult.painScale;
+                }
+                if (vitalsResult.detectedSummary) {
+                  setShiftAlertMessage(`Voice telemetry captured: ${vitalsResult.detectedSummary}`);
+                }
+              }
+
+              const calculated = calculateEsiScore(newChiefComplaint, newPainScale, newVitals);
+              newEsiScore = calculated.score;
             }
 
             return {
@@ -406,6 +421,7 @@ export default function MediScribeConsole() {
               voiceDialogue: currentDialogue,
               chiefComplaint: newChiefComplaint,
               painScale: newPainScale,
+              patientVitals: newVitals,
               esiScore: newEsiScore
             };
           });
@@ -533,6 +549,9 @@ export default function MediScribeConsole() {
             let newPatientName = prev.patientName;
             let newChiefComplaint = prev.chiefComplaint;
             let newMeds = [...prev.patientMeds];
+            let newVitals = { ...prev.patientVitals };
+            let newPainScale = prev.painScale;
+            let newCriticalAlert = prev.criticalAlert;
 
             // Extract patient name if currently default intake label
             if (prev.patientName.startsWith('Patient Intake') || prev.patientName === 'Patient') {
@@ -553,6 +572,18 @@ export default function MediScribeConsole() {
               }
             }
 
+            // Extract spoken vitals and telemetry (BP, HR, SpO2, RR, Temp, Pain)
+            const vitalsResult = extractVitalsFromText(turn.text, prev.patientVitals);
+            if (vitalsResult.hasUpdates) {
+              newVitals = vitalsResult.vitals;
+              if (vitalsResult.painScale !== undefined) {
+                newPainScale = vitalsResult.painScale;
+              }
+              if (vitalsResult.detectedSummary) {
+                setShiftAlertMessage(`Ambient telemetry captured: ${vitalsResult.detectedSummary}`);
+              }
+            }
+
             // Extract chief complaint from early patient utterances if empty
             if (!newChiefComplaint || newChiefComplaint === 'General Bedside Triage' || newChiefComplaint === 'Awaiting intake') {
               if (turn.speaker === 'Patient' && turn.text.trim().length > 15) {
@@ -560,11 +591,31 @@ export default function MediScribeConsole() {
               }
             }
 
+            // Check if any critical vitals threshold exceeded (e.g. SBP >= 180, SpO2 < 90, HR > 130)
+            const sysMatch = newVitals['Blood Pressure']?.match(/^(\d{2,3})\//);
+            const spo2Num = parseInt(newVitals['SpO2']);
+            const hrNum = parseInt(newVitals['Heart Rate']);
+
+            if (sysMatch && parseInt(sysMatch[1]) >= 180) {
+              newCriticalAlert = `Hypertensive Crisis Alert: Systolic Blood Pressure ${sysMatch[1]} mmHg`;
+            } else if (!isNaN(spo2Num) && spo2Num < 90) {
+              newCriticalAlert = `Critical Hypoxemia Alert: SpO2 ${spo2Num}%`;
+            } else if (!isNaN(hrNum) && hrNum > 130) {
+              newCriticalAlert = `Severe Tachycardia Alert: Heart Rate ${hrNum} bpm`;
+            }
+
+            // Recalculate ESI Triage Score dynamically with updated vitals and pain
+            const newEsi = calculateEsiScore(newChiefComplaint, newPainScale, newVitals);
+
             return {
               ...prev,
               patientName: newPatientName,
               chiefComplaint: newChiefComplaint,
+              painScale: newPainScale,
               patientMeds: newMeds,
+              patientVitals: newVitals,
+              esiScore: newEsi.score,
+              criticalAlert: newCriticalAlert,
               scribeDialogue: currentDialogue
             };
           });
