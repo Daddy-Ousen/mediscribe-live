@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-In acute healthcare environments (Emergency Departments and acute trauma bays), clinicians spend up to **40% of their shifts manually typing Electronic Health Record (EHR) progress notes and clicking through complex EHR forms**, diverting critical attention away from direct patient care. Furthermore, critical medication contraindications and escalating physiological vital instability often go unflagged during initial bedside intake.
+In acute healthcare environments (Emergency Departments and acute trauma bays), clinicians lose a large part of every shift to typing Electronic Health Record (EHR) notes and clicking through EHR forms. In one time-and-motion study, physicians spent **about half of their office day on EHR and desk work** (Sinsky et al., *Annals of Internal Medicine*, 2016). That is time taken away from direct patient care. Furthermore, critical medication contraindications and escalating physiological vital instability often go unflagged during initial bedside intake.
 
 **MediScribe Live** solves this with an autonomous, voice-first clinical triage copilot and ambient medical scribe powered directly by **AssemblyAI Voice Agent API** and **Realtime STT**:
 
@@ -45,7 +45,7 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
                           |               User Browser                   |
                           |     Next.js 14 + Tailwind CSS Console        |
                           +------^-------------------------------^-------+
-                                 | 1. Mint Short-Lived Token     | 2. Direct WebSockets (Sub-second Latency)
+                                 | 1. Mint Short-Lived Token     | 2. Direct WebSockets (browser <-> AssemblyAI)
                                  v                               v
                  +-------------------------------+  +------------------------------------------+
                  |       Next.js API Server      |  |          AssemblyAI Cloud Edge           |

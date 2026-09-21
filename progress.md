@@ -25,7 +25,7 @@ Submit: title, short + long description, tags, cover image, video, slides, publi
 - [x] No fake "Patient" turns. Tool data goes to SOAP in a labeled "[Structured intake record ... not verbatim speech]" section. Dialogue is not mutated.
 - [x] Removed false claims in UI + README (RxNorm, 0.00s LAG, <600ms, zero latency, "Verified against hospital KB", Dr. Sarah Lin).
 - [x] Drug checker de-duplicates meds case-insensitively (was raising 4 copies of one alert).
-- [ ] Deploy to Vercel and confirm live URL works with mic.
+- [x] Deployed. Live URL https://mediscribe.rhasan.online serves latest code (verified 2026-09-22: page 200, token routes 200, SOAP route 200 with 3/3 sourced). Mic test on live site still to do by user.
 - [ ] Record demo video, make slides, cover image.
 
 ## Plan B items 1-5 (2026-09-21, not committed, all verified)
@@ -38,11 +38,20 @@ Submit: title, short + long description, tags, cover image, video, slides, publi
 - [x] E2E test (Playwright + Windows SAPI speech WAV `scratch/e2e-test.wav` into fake mic): transcript correct, speakers correct, name "Maria Lopez", SOAP 9/9 sourced, signed, FHIR final, 0 console errors.
 
 ## Open
-- [ ] User: review + commit + push, redeploy Vercel. Optionally set SOAP_MODEL on Vercel once a better model is unlocked.
+- [x] Code committed, merged (PR #2), deployed.
+- [ ] User: commit README fix + LICENSE + SUBMISSION.md (2026-09-22).
+- [ ] Submit on lablab using SUBMISSION.md.
+- [ ] Old note: set SOAP_MODEL on Vercel only if a better model is unlocked. Optionally set SOAP_MODEL on Vercel once a better model is unlocked.
 - [ ] User: record video, slides, cover image.
 - [ ] Get stronger LLM model access (hackathon credits link on lablab page) — qwen sometimes adds mild inference in plan instructions.
 - [ ] Name regex in voice path can still overwrite names ("I am tired").
 - [ ] Split `page.tsx` (~1950 lines) — optional.
+
+## Submission prep (2026-09-22)
+- [x] `npm run build` + `tsc` clean.
+- [x] Added MIT `LICENSE` (README claimed MIT, file was missing).
+- [x] README: replaced unsourced "40%" claim with Sinsky 2016 citation; removed "Sub-second Latency".
+- [x] Wrote `SUBMISSION.md` (title, descriptions, tags, checklist, video script).
 
 ## Decisions
 - Next.js 14 app router, client-side WebSockets with server-minted tokens.
