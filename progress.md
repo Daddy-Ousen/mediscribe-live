@@ -13,6 +13,12 @@ Submit: title, short + long description, tags, cover image, video, slides, publi
 - `npx tsc --noEmit` passes
 - Full audit done (see handoff.md for findings)
 
+## Ambient Scribe fix (2026-09-21, not committed)
+- [x] Root cause 1: recorder sent 4096-sample frames; on 96 kHz mics that is 43 ms at 16 kHz, and AssemblyAI rejects <50 ms (error 3007, close reason "See Error message for details"). Recorder now emits fixed 100 ms frames. Verified: every frame 3200 bytes at a 96 kHz fake mic.
+- [x] Root cause 2: the real server error was overwritten by the generic close message. The client now shows the server error in plain words (1008 too many sessions, 3007, 3005 expired).
+- [x] Root cause 3: sessions could linger (no Terminate while CONNECTING, orphan sessions if Stop was pressed during token fetch, late onclose flipping the status of a newer session). Fixed in both clients, plus Terminate on tab close.
+- [x] Verified in browser: scribe streams 10 frames/s with no errors, Stop sends Terminate + 1000 close, Voice Agent still connects and greets.
+
 ## Open — P0 (must fix before submit)
 - [x] Deleted fallback SOAP engine. LLM failure now returns 502 with a clear error (tested with a real 429). One retry after 1.5 s.
 - [x] No invented defaults: "Not discussed during encounter" everywhere; no NKDA; dx/ICD only if clinician states it; differentials labeled "AI-suggested (unconfirmed)"; provider = "Unsigned draft - pending clinician review". Tested live.
@@ -22,18 +28,21 @@ Submit: title, short + long description, tags, cover image, video, slides, publi
 - [ ] Deploy to Vercel and confirm live URL works with mic.
 - [ ] Record demo video, make slides, cover image.
 
-## Open — P1 (should do)
-- [ ] Commit the P0 changes (not committed yet).
-- [ ] Small model suggested "Dermatitis herpetiformis" for a sore throat. Model upgrade is now more urgent.
-- [ ] LLM Gateway rate limit (429) seen during testing. Avoid rapid repeat compiles in the demo.
-- [ ] Upgrade SOAP model on LLM Gateway to a stronger model; add JSON retry.
-- [ ] Add "source quote" per SOAP line (click line → shows transcript turn). Strong grounding story.
-- [ ] Clinician review step: SOAP is "Draft" until a human signs.
-- [ ] Measure real latency (speech end → first agent audio) and show it live.
-- [ ] Put the cockpit first; move marketing sections below or to a separate page.
-- [ ] Fix name regex overwriting names ("I am tired" → "Tired").
-- [ ] Add favicon; replace Unsplash photo pill; remove cyan buttons (break DESIGN.md).
-- [ ] Split `page.tsx` (1960 lines) — optional.
+## Plan B items 1-5 (2026-09-21, not committed, all verified)
+- [x] 1 Model: `SOAP_MODEL` env var (default `qwen3.5-4b-32k-fast`). The key has NO access to any other LLM Gateway model (probed 17 models: all 400 "no access"). Needs paid plan / hackathon credits.
+- [x] 2 Source quotes: server numbers turns T1..Tn, model returns evidence map, server VERIFIES each citation by word overlap with the turn text (replaces or drops wrong ones), flags unsourced items. Allergy backup regex. Viewer: T-chips open quote panel; "SOURCE-LINKED x/y" summary.
+- [x] 3 Sign-off: DRAFT until clinician name + (ack of NO SOURCE items). FHIR Composition preliminary -> final + attester.
+- [x] 4 Layout: compact header + 4-step workflow strip; order roster > cockpit > SOAP > ledger > architecture; no stock photos; no cyan; text sizes 9-11px -> 11-12px; favicon `src/app/icon.svg`; no horizontal scroll at 375 px.
+- [x] 5 Latency: Voice Agent measures end-of-speech event -> first agent audio chunk; panel shows last/median/n.
+- [x] Scribe feed bugs found in e2e test and fixed: turns merged by turn_order id (no duplicates, no React key errors); partial turns = "IDENTIFYING SPEAKER"; label->role map (first speaker = Doctor) + "Swap Doctor / Patient" button; SpeakerRevision handled; chart extraction on final turns only; chief complaint from first symptom turn.
+- [x] E2E test (Playwright + Windows SAPI speech WAV `scratch/e2e-test.wav` into fake mic): transcript correct, speakers correct, name "Maria Lopez", SOAP 9/9 sourced, signed, FHIR final, 0 console errors.
+
+## Open
+- [ ] User: review + commit + push, redeploy Vercel. Optionally set SOAP_MODEL on Vercel once a better model is unlocked.
+- [ ] User: record video, slides, cover image.
+- [ ] Get stronger LLM model access (hackathon credits link on lablab page) — qwen sometimes adds mild inference in plan instructions.
+- [ ] Name regex in voice path can still overwrite names ("I am tired").
+- [ ] Split `page.tsx` (~1950 lines) — optional.
 
 ## Decisions
 - Next.js 14 app router, client-side WebSockets with server-minted tokens.

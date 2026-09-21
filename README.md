@@ -22,15 +22,19 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
    - Powered by **Universal-3.5 Pro** with **`domain: "medical-v1"`** for high-precision transcription of pharmacology, anatomical structures, and diagnostic terms.
    - Multi-speaker diarization distinguishing between `Doctor` and `Patient`.
    - Real-time clinical entity detection highlighting Symptoms, Medications, Dosages, and Diagnoses live on screen.
-4. **Automated SOAP Documentation & HL7 FHIR v4 Integration**:
+4. **Source-Linked SOAP Documentation & HL7 FHIR R4**:
    - Drafts SOAP notes (Subjective, Objective, Assessment, Plan) via the AssemblyAI LLM Gateway, from the recorded dialogue only.
+   - **Source links:** every documented item carries chips (`T4`, `T9`) that open the exact transcript turn it came from. The server checks each citation against the turn text; a citation that does not match is replaced or dropped, and items with no source are flagged `NO SOURCE - VERIFY`.
+   - **Clinician sign-off:** the note stays a DRAFT until a clinician enters their name and signs. Unsourced items must be acknowledged first. Signing sets the FHIR `Composition` to `final` with an attester.
    - **No invented data:** anything not discussed is marked "Not discussed during encounter". Allergies are never defaulted to NKDA. There is no offline template fallback: if synthesis fails, no note is produced.
    - Diagnosis and ICD-10 code appear only when the clinician states them. AI differentials are labeled as unconfirmed suggestions.
    - Every note is an unsigned draft pending clinician review.
-   - Generates and exports HL7 FHIR v4 Document Bundles (`application/fhir+json`).
+   - Exports an HL7 FHIR R4 document Bundle (`Composition`, `Patient`, `Encounter`, provisional `Condition`).
 5. **Real-Time Spoken Demographics & Autonomous Intake Confirmation**:
    - Detects patient name and demographics directly from spoken intake turns, updating the clinical chart and shift ledger live.
    - Automatically concludes and closes the audio session upon intake completion with verbal reassurance.
+6. **Measured Response Latency**:
+   - The Voice Agent panel shows the real time from the server's end-of-speech event to the first agent audio chunk (last and median), measured in the browser. No hard-coded latency claims.
 
 ---
 
@@ -60,7 +64,7 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
                    Internal Clinical KB
                    - Curated drug-interaction rules (demo)
                    - Emergency Severity Index (ESI)
-                   - HL7 FHIR v4 / ICD-10 Schemas
+                   - HL7 FHIR R4 / ICD-10 Schemas
 ```
 
 ### Key Technologies
@@ -101,6 +105,8 @@ npm install
 Create a `.env.local` file in the project root:
 ```env
 ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
+# Optional: LLM Gateway model for SOAP notes (default qwen3.5-4b-32k-fast)
+SOAP_MODEL=claude-sonnet-5
 ```
 
 ### 3. Run Development Server
@@ -151,7 +157,9 @@ Deploy **MediScribe Live** directly to Vercel with zero configuration:
    - Switch to **Ambient Scribe** mode.
    - Click **"Start Ambient Scribe"** for continuous doctor-patient consultation transcription with medical nomenclature recognition.
 4. **Automated SOAP & FHIR Documentation**:
-   - Click **"Compile SOAP Documentation"** to draft a SOAP note and HL7 FHIR v4 bundle from the recorded dialogue. Voice-agent tool data is passed in a labeled section, never as patient speech.
+   - Click **"Compile SOAP Documentation"** to draft a SOAP note and HL7 FHIR R4 bundle from the recorded dialogue. Voice-agent tool data is passed in a labeled section, never as patient speech.
+   - Click any `T` chip to see the source quote. Review items marked `NO SOURCE`, enter a clinician name, and click **"Sign and finalize"**.
+   - In Ambient Scribe, the first speaker is assumed to be the clinician. If the patient spoke first, click **"Swap Doctor / Patient"**.
 
 ---
 

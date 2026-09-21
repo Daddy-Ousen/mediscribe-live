@@ -42,11 +42,24 @@ export interface ClinicalEntity {
 
 export interface DialogueTurn {
   id: string;
-  speaker: 'Doctor' | 'Patient' | 'MediScribe AI';
+  // 'Unknown' is used while the streaming model has not assigned a speaker yet
+  speaker: 'Doctor' | 'Patient' | 'MediScribe AI' | 'Unknown';
   text: string;
   timestamp: string;
   isFinal: boolean;
   entities?: ClinicalEntity[];
+}
+
+// One numbered line of the encounter record that SOAP items can cite
+export interface SourceTurn {
+  n: number;
+  speaker: string; // 'Doctor' | 'Patient' | 'MediScribe AI' | 'Chart' (tool-call data, not speech)
+  text: string;
+}
+
+export interface SoapSignature {
+  signedBy: string;
+  signedAt: string;
 }
 
 export interface SoapNote {
@@ -54,6 +67,16 @@ export interface SoapNote {
   patientName: string;
   encounterDate: string;
   provider: string;
+  model?: string;
+  // Transcript turns the note was built from, numbered T1..Tn
+  sourceTurns?: SourceTurn[];
+  // Field path (e.g. "subjective.allergies.0") -> turn numbers that support it
+  evidence?: Record<string, number[]>;
+  // Field paths that contain content but no supporting turn
+  unsupported?: string[];
+  // Count of documented items and how many cite a source turn
+  grounding?: { total: number; sourced: number };
+  signature?: SoapSignature | null;
   subjective: {
     chiefComplaint: string;
     historyOfPresentIllness: string;
