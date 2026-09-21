@@ -80,6 +80,7 @@ export default function MediScribeConsole() {
   const [voiceStatus, setVoiceStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'listening' | 'speaking' | 'interrupted'>('disconnected');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [volume, setVolume] = useState<number>(0);
+  const [latencies, setLatencies] = useState<number[]>([]);
 
   // Ambient Scribe State
   const [scribeStatus, setScribeStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'transcribing'>('disconnected');
@@ -362,6 +363,7 @@ export default function MediScribeConsole() {
       voiceClientRef.current = new VoiceAgentClient({
         onStatusChange: (status) => setVoiceStatus(status as any),
         onVolumeChange: (vol) => setVolume(vol),
+        onLatency: (ms) => setLatencies(prev => [...prev.slice(-49), ms]),
         onAutoClose: (reason) => {
           setVoiceStatus('disconnected');
           setShiftAlertMessage(reason || 'Patient intake concluded. Voice session confirmed and closed automatically.');
@@ -597,13 +599,18 @@ export default function MediScribeConsole() {
           setCompileWarning(null);
           setScribeError(null);
           updateActiveEncounter(prev => {
+            // Partial and final versions of a turn share an id: replace in place, never duplicate
             const currentDialogue = [...prev.scribeDialogue];
-            const last = currentDialogue[currentDialogue.length - 1];
-
-            if (last && last.speaker === turn.speaker && !last.isFinal) {
-              currentDialogue[currentDialogue.length - 1] = turn;
+            const existing = currentDialogue.findIndex(d => d.id === turn.id);
+            if (existing >= 0) {
+              currentDialogue[existing] = turn;
             } else {
               currentDialogue.push(turn);
+            }
+
+            // Chart extraction runs on final turns only, so partial guesses never reach the chart
+            if (!turn.isFinal) {
+              return { ...prev, scribeDialogue: currentDialogue };
             }
 
             let newPatientName = prev.patientName;
@@ -613,11 +620,11 @@ export default function MediScribeConsole() {
             let newPainScale = prev.painScale;
             let newCriticalAlert = prev.criticalAlert;
 
-            // Extract patient name if currently default intake label
-            if (prev.patientName.startsWith('Patient Intake') || prev.patientName === 'Patient') {
-              const nameMatch = turn.text.match(/(?:my name is|i am|i'm|name's|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
-              if (nameMatch && nameMatch[1]) {
-                newPatientName = nameMatch[1].trim();
+            // Extract patient name if currently default intake label (patient turns only)
+            if ((prev.patientName.startsWith('Patient Intake') || prev.patientName === 'Patient') && turn.speaker !== 'Doctor') {
+              const spokenName = extractSpokenPatientName(turn.text);
+              if (spokenName) {
+                newPatientName = spokenName;
                 setShiftAlertMessage(`Patient demographics detected from dialogue: ${newPatientName}`);
               }
             }
@@ -644,10 +651,10 @@ export default function MediScribeConsole() {
               }
             }
 
-            // Extract chief complaint from early patient utterances if empty
-            if (!newChiefComplaint || newChiefComplaint === 'General Bedside Triage' || newChiefComplaint === 'Awaiting intake') {
-              if (turn.speaker === 'Patient' && turn.text.trim().length > 15) {
-                newChiefComplaint = turn.text.slice(0, 70);
+            // Chief complaint: first patient turn that names a symptom
+            if (!newChiefComplaint || newChiefComplaint === 'Awaiting bedside voice triage intake') {
+              if (turn.speaker !== 'Doctor' && turn.entities?.some(e => e.category === 'symptom')) {
+                newChiefComplaint = turn.text.length > 90 ? `${turn.text.slice(0, 90)}...` : turn.text;
               }
             }
 
@@ -679,6 +686,12 @@ export default function MediScribeConsole() {
               scribeDialogue: currentDialogue
             };
           });
+        },
+        onSpeakerRevision: (turnId, speaker) => {
+          updateActiveEncounter(prev => ({
+            ...prev,
+            scribeDialogue: prev.scribeDialogue.map(d => d.id === turnId ? { ...d, speaker } : d)
+          }));
         },
         onError: (err) => {
           console.error('Streaming STT error:', err);
@@ -746,7 +759,7 @@ export default function MediScribeConsole() {
     setCompileWarning(null);
     setIsGeneratingSoap(true);
 
-    const dialogueText = (sourceDialogue || []).map((d) => `${d.speaker}: ${d.text}`).join('\n');
+    const dialogueText = (sourceDialogue || []).filter((d) => d.isFinal !== false).map((d) => `${d.speaker}: ${d.text}`).join('\n');
     const effectiveTranscript = [
       dialogueText,
       structuredIntake.length > 0
@@ -795,6 +808,42 @@ export default function MediScribeConsole() {
     }
   };
 
+  // Diarization cannot know who is the clinician: let the user flip the roles
+  const handleSwapSpeakers = () => {
+    scribeClientRef.current?.swapRoles();
+    const flip = (sp: DialogueTurn['speaker']): DialogueTurn['speaker'] =>
+      sp === 'Doctor' ? 'Patient' : sp === 'Patient' ? 'Doctor' : sp;
+    updateActiveEncounter(prev => ({
+      ...prev,
+      scribeDialogue: prev.scribeDialogue.map(d => ({ ...d, speaker: flip(d.speaker) }))
+    }));
+  };
+
+  // Clinician sign-off: locks the draft and marks the FHIR Composition final
+  const handleSignSoapNote = (clinicianName: string) => {
+    const signedAt = new Date().toLocaleString();
+    updateActiveEncounter(prev => {
+      if (!prev.soapNote) return prev;
+      const fhir = prev.soapNote.fhirJson || {};
+      const entry = Array.isArray(fhir.entry)
+        ? fhir.entry.map((e: any) => e?.resource?.resourceType === 'Composition'
+            ? { resource: { ...e.resource, status: 'final', attester: [{ mode: 'legal', time: new Date().toISOString(), party: { display: clinicianName } }] } }
+            : e)
+        : fhir.entry;
+      return {
+        ...prev,
+        soapNote: {
+          ...prev.soapNote,
+          provider: clinicianName,
+          signature: { signedBy: clinicianName, signedAt },
+          fhirJson: { ...fhir, entry }
+        }
+      };
+    });
+    setShiftAlertMessage(`SOAP note signed by ${clinicianName}.`);
+    setTimeout(() => setShiftAlertMessage(null), 5000);
+  };
+
   const handleCheckDrugs = () => {
     const res = checkDrugInteractions([drugA, drugB]);
     setDrugResult({
@@ -812,7 +861,7 @@ export default function MediScribeConsole() {
       {/* FLOATING GLASS NAVIGATION CAPSULE */}
       <nav className="sticky top-4 z-50 mx-auto max-w-fit px-4 sm:px-6 py-2.5 rounded-full bg-obsidian-400/90 backdrop-blur-md border border-console-border shadow-2xl flex items-center gap-3 sm:gap-6 text-xs font-mono transition-all">
         <a href="#hero" className="flex items-center gap-2 group">
-          <div className="w-6 h-6 rounded-md bg-obsidian-500 border border-console-border flex items-center justify-center text-emerald-400 font-bold text-[10px] group-hover:border-emerald-500 transition-colors">
+          <div className="w-6 h-6 rounded-md bg-obsidian-500 border border-console-border flex items-center justify-center text-emerald-400 font-bold text-xs group-hover:border-emerald-500 transition-colors">
             MS
           </div>
           <span className="font-bold tracking-tight text-slate-100 text-xs sm:text-sm">
@@ -820,105 +869,75 @@ export default function MediScribeConsole() {
           </span>
         </a>
 
-        <div className="hidden md:flex items-center gap-5 text-[11px] text-slate-400">
+        <div className="hidden md:flex items-center gap-5 text-xs text-slate-400">
           <a href="#roster" className="hover:text-emerald-400 transition-colors">Patient Queue ({encounters.length})</a>
           <a href="#cockpit" className="hover:text-emerald-400 transition-colors">Cockpit</a>
-          <a href="#records" className="hover:text-emerald-400 transition-colors">Shift Ledger</a>
           <a href="#soap" className="hover:text-emerald-400 transition-colors">SOAP &amp; FHIR</a>
+          <a href="#records" className="hover:text-emerald-400 transition-colors">Shift Ledger</a>
           <a href="#rxnorm" className="hover:text-emerald-400 transition-colors">Pharmacology</a>
         </div>
 
         <div className="flex items-center gap-2 pl-2 border-l border-console-border">
           <span className={`w-2 h-2 rounded-full ${isAnyLive ? 'bg-emerald-400 animate-ping' : 'bg-emerald-500/70'}`} />
-          <span className="hidden sm:inline text-[10px] text-slate-400">
+          <span className="hidden sm:inline text-xs text-slate-400">
             {isAnyLive ? 'DSP ACTIVE' : `${encounters.length - completedCount} QUEUED`}
           </span>
           <a
             href="#cockpit"
-            className="btn-hardware ml-1 px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] rounded-full uppercase tracking-wider"
+            className="btn-hardware ml-1 px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-full uppercase tracking-wider"
           >
             Console
           </a>
         </div>
       </nav>
 
-      {/* ATTENTION: EDITORIAL HERO SECTION */}
-      <section id="hero" className="pt-16 pb-16 sm:pt-24 sm:pb-24 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center flex flex-col items-center">
-        {/* Editorial Sub-Kicker */}
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-obsidian-400 border border-console-border text-emerald-400 font-mono text-[11px] font-bold uppercase tracking-kicker mb-6">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span>AssemblyAI Voice Agent API • Bedside Triage &amp; Shift EHR Management</span>
-        </div>
-
-        {/* H1 Headline with Inline Photographic Pill */}
-        <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight text-white leading-[1.08] max-w-5xl">
-          Clinical bedside voice{' '}
-          <span className="inline-flex items-center align-middle mx-1 sm:mx-2 w-16 sm:w-24 h-7 sm:h-10 rounded-full overflow-hidden border border-emerald-500/50 shadow-inner bg-slate-900">
-            <img
-              src="https://images.unsplash.com/photo-1579684385127-1ef15d508118?auto=format&fit=crop&w=300&q=80"
-              alt="Clinical Telemetry Monitor"
-              className="w-full h-full object-cover grayscale contrast-125 hover:grayscale-0 transition-all duration-700"
-            />
-          </span>{' '}
-          triage that documents only what was said.
-        </h1>
-
-        {/* Subtext under 20 words */}
-        <p className="mt-6 text-sm sm:text-base text-slate-400 max-w-2xl leading-relaxed font-sans">
-          Bedside triage voice agent and ambient medical scribe. Real-time pharmacology checks. Every note is a draft for clinician review.
-        </p>
-
-        {/* Tactile Action Buttons */}
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3 font-mono text-xs">
-          <a
-            href="#cockpit"
-            className="btn-hardware px-6 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold uppercase tracking-wider rounded-lg shadow-lg shadow-emerald-500/20 flex items-center gap-2"
-          >
-            <Mic className="w-3.5 h-3.5" />
-            <span>Launch Bedside Copilot</span>
-          </a>
-          <button
-            onClick={handleNewPatientIntake}
-            className="btn-hardware px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold uppercase tracking-wider rounded-lg flex items-center gap-2"
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>+ New Patient Intake</span>
-          </button>
-          <a
-            href="#records"
-            className="btn-hardware px-6 py-3 bg-console-elevated hover:bg-console-highlight border border-console-border text-slate-200 uppercase tracking-wider rounded-lg flex items-center gap-2"
-          >
-            <Archive className="w-3.5 h-3.5 text-amber-400" />
-            <span>Shift Records Ledger</span>
-          </a>
-        </div>
-
-        {/* Monospace Hardware Telemetry Ticker Strip */}
-        <div className="mt-12 w-full grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs text-left">
-          <div className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
-            <div className="text-[10px] text-slate-500 uppercase">WEBSOCKET TRANSPORT</div>
-            <div className="text-slate-200 font-bold mt-0.5">wss://agents.assemblyai.com</div>
-            <div className="text-[10px] text-emerald-400 mt-1">Single Full-Duplex Socket</div>
+      {/* COMPACT PRODUCT HEADER */}
+      <section id="hero" className="pt-10 pb-8 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+          <div className="max-w-3xl">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-obsidian-400 border border-console-border text-emerald-400 font-mono text-xs font-bold uppercase tracking-kicker mb-4">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>AssemblyAI Voice Agent API + Realtime STT (medical-v1)</span>
+            </div>
+            <h1 className="text-3xl sm:text-5xl font-bold tracking-tight text-white leading-[1.1]">
+              Bedside voice triage that documents only what was said.
+            </h1>
+            <p className="mt-4 text-base text-slate-400 leading-relaxed max-w-2xl">
+              A voice agent runs patient intake. An ambient scribe records the consult. Every SOAP line links to the turn it came from, and nothing is final until a clinician signs.
+            </p>
           </div>
-
-          <div className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
-            <div className="text-[10px] text-slate-500 uppercase">TURN-TAKING</div>
-            <div className="text-slate-200 font-bold mt-0.5">Neural VAD Turn Detection</div>
-            <div className="text-[10px] text-cyan-400 mt-1">Instant Barge-In Flush</div>
-          </div>
-
-          <div className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
-            <div className="text-[10px] text-slate-500 uppercase">ACTIVE ENCOUNTERS</div>
-            <div className="text-slate-200 font-bold mt-0.5 num-data">{encounters.length} Patients in Shift</div>
-            <div className="text-[10px] text-amber-400 mt-1">{completedCount} Completed / Admitted</div>
-          </div>
-
-          <div className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
-            <div className="text-[10px] text-slate-500 uppercase">CLINICAL OUTPUT</div>
-            <div className="text-slate-200 font-bold mt-0.5">HL7 FHIR v4 + ICD-10</div>
-            <div className="text-[10px] text-slate-400 mt-1">Automated SOAP Synthesis</div>
+          <div className="flex flex-wrap gap-3 font-mono text-xs shrink-0">
+            <a
+              href="#cockpit"
+              className="btn-hardware px-5 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold uppercase tracking-wider rounded-lg flex items-center gap-2"
+            >
+              <Mic className="w-4 h-4" />
+              <span>Open Console</span>
+            </a>
+            <button
+              onClick={handleNewPatientIntake}
+              className="btn-hardware px-5 py-3 bg-console-elevated hover:bg-console-highlight border border-console-border text-slate-200 font-bold uppercase tracking-wider rounded-lg flex items-center gap-2"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>New Patient Intake</span>
+            </button>
           </div>
         </div>
+
+        {/* Workflow strip */}
+        <ol className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-3 font-mono text-xs">
+          {[
+            ['01', 'Voice intake', 'Agent asks, calls tools, flags risk'],
+            ['02', 'Ambient scribe', 'Doctor and patient, diarized live'],
+            ['03', 'Source-linked SOAP', 'Every line cites a transcript turn'],
+            ['04', 'Clinician sign-off', 'Draft until a human signs']
+          ].map(([n, title, sub]) => (
+            <li key={n} className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
+              <div className="text-emerald-400 font-bold">{n} / {title.toUpperCase()}</div>
+              <div className="text-slate-400 mt-1 font-sans text-sm">{sub}</div>
+            </li>
+          ))}
+        </ol>
       </section>
 
       {/* PATIENT ROSTER & TRIAGE QUEUE STRIP */}
@@ -930,7 +949,7 @@ export default function MediScribeConsole() {
               <span className="font-mono text-xs uppercase font-bold tracking-wider text-slate-200">
                 Department Triage Roster &amp; Queue Management
               </span>
-              <span className="px-2 py-0.5 bg-obsidian-500 border border-console-border text-slate-400 font-mono text-[10px] rounded">
+              <span className="px-2 py-0.5 bg-obsidian-500 border border-console-border text-slate-400 font-mono text-xs rounded">
                 SHIFT ROSTER
               </span>
             </div>
@@ -966,10 +985,10 @@ export default function MediScribeConsole() {
                     <div className="flex items-center gap-1.5">
                       <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-400 animate-pulse' : isCompleted ? 'bg-slate-500' : 'bg-amber-400'}`} />
                       <span className="font-bold text-slate-200">{enc.bed}</span>
-                      <span className="text-[10px] text-slate-500">[{enc.mrn}]</span>
+                      <span className="text-xs text-slate-500">[{enc.mrn}]</span>
                     </div>
                     <span
-                      className={`px-1.5 py-0.2 text-[9px] rounded font-bold uppercase ${
+                      className={`px-1.5 py-0.2 text-xs rounded font-bold uppercase ${
                         isCompleted
                           ? 'bg-slate-800 text-slate-400 border border-slate-700'
                           : enc.esiScore.includes('ESI-1')
@@ -985,12 +1004,12 @@ export default function MediScribeConsole() {
 
                   <div>
                     <div className="font-sans font-bold text-slate-100 text-sm">{enc.patientName}</div>
-                    <div className="text-[11px] text-slate-400 truncate mt-0.5 font-sans">
+                    <div className="text-xs text-slate-400 truncate mt-0.5 font-sans">
                       {enc.chiefComplaint}
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-2 border-t border-console-border/60">
+                  <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-console-border/60">
                     <span>
                       {enc.voiceDialogue.length + enc.scribeDialogue.length} TURNS
                     </span>
@@ -1015,7 +1034,7 @@ export default function MediScribeConsole() {
       </section>
 
       {/* DESIRE: INTERACTIVE BEDSIDE & AMBIENT COCKPIT */}
-      <section id="cockpit" className="py-12 sm:py-20 border-t border-console-border bg-obsidian-300/60">
+      <section id="cockpit" className="py-8 sm:py-10 border-t border-console-border bg-obsidian-300/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Active Patient Encounter Header Bar */}
           <div className="bg-obsidian-400 border border-console-border rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -1025,13 +1044,13 @@ export default function MediScribeConsole() {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-[10px] text-emerald-400 uppercase font-bold tracking-wider">
+                  <span className="font-mono text-xs text-emerald-400 uppercase font-bold tracking-wider">
                     ACTIVE ENCOUNTER
                   </span>
-                  <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-slate-400 font-mono text-[10px] rounded">
+                  <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-slate-400 font-mono text-xs rounded">
                     {activeEncounter.bed} • {activeEncounter.mrn}
                   </span>
-                  <span className="px-1.5 py-0.2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-[10px] rounded">
+                  <span className="px-1.5 py-0.2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-xs rounded">
                     {activeEncounter.status.toUpperCase()}
                   </span>
                 </div>
@@ -1076,7 +1095,7 @@ export default function MediScribeConsole() {
           {/* Console Subheader with Mode Switcher */}
           <div className="flex flex-col md:flex-row md:items-end justify-between mb-6 gap-4">
             <div>
-              <div className="font-mono text-[11px] text-emerald-400 uppercase font-bold tracking-wider">
+              <div className="font-mono text-xs text-emerald-400 uppercase font-bold tracking-wider">
                 CHAPTER 01 / OPERATIONAL COCKPIT
               </div>
               <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white mt-0.5">
@@ -1117,7 +1136,7 @@ export default function MediScribeConsole() {
                 }}
                 className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                   cockpitMode === 'ambient-scribe'
-                    ? 'bg-cyan-500 text-slate-950 font-black'
+                    ? 'bg-emerald-500 text-slate-950 font-black'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -1140,7 +1159,7 @@ export default function MediScribeConsole() {
                         <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
                           Autonomous Spoken Intake Protocol
                         </span>
-                        <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-emerald-400 font-mono text-[10px] rounded">
+                        <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-emerald-400 font-mono text-xs rounded">
                           PCM 24,000 HZ
                         </span>
                       </div>
@@ -1190,7 +1209,7 @@ export default function MediScribeConsole() {
                   )}
 
                   {/* Hardware VU Meter */}
-                  <AudioWaveform status={voiceStatus} volume={volume} sampleRate={24000} />
+                  <AudioWaveform status={voiceStatus} volume={volume} sampleRate={24000} latencies={latencies} />
 
                   {/* Live Dialogue Stream Feed */}
                   <div ref={voiceFeedRef} className="bg-obsidian-500 border border-console-border rounded-lg p-4 h-80 overflow-y-auto space-y-3 font-mono text-xs">
@@ -1198,7 +1217,7 @@ export default function MediScribeConsole() {
                       <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
                         <Terminal className="w-6 h-6 mb-2 text-slate-600" />
                         <p className="text-xs font-bold text-slate-400">Dialogue channel ready for {activeEncounter.patientName}.</p>
-                        <p className="text-[11px] text-slate-600 mt-1 max-w-sm font-sans">
+                        <p className="text-xs text-slate-600 mt-1 max-w-sm font-sans">
                           Click &quot;Initialize Voice Triage&quot; to begin live bedside microphone intake. Transcripts, clinical flags, and SOAP documentation attach cleanly to {activeEncounter.mrn}.
                         </p>
                       </div>
@@ -1212,7 +1231,7 @@ export default function MediScribeConsole() {
                               : 'bg-console-surface border-console-border text-slate-200 ml-4'
                           }`}
                         >
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
                             <span className={turn.speaker === 'MediScribe AI' ? 'text-emerald-400 font-bold' : 'text-slate-300 font-semibold'}>
                               {turn.speaker.toUpperCase()}
                             </span>
@@ -1239,7 +1258,7 @@ export default function MediScribeConsole() {
 
                   {/* Compile Action Bar */}
                   <div className="flex flex-wrap items-center justify-between pt-2 border-t border-console-border gap-2 text-xs">
-                    <span className="text-slate-500 font-mono text-[11px]">
+                    <span className="text-slate-500 font-mono text-xs">
                       {activeEncounter.patientName} &bull;{' '}
                       {activeEncounter.voiceDialogue.length > 0
                         ? `${activeEncounter.voiceDialogue.length} speech turns recorded`
@@ -1267,7 +1286,7 @@ export default function MediScribeConsole() {
                         <span className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
                           Realtime Ambient Consultation Scribe
                         </span>
-                        <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-cyan-400 font-mono text-[10px] rounded">
+                        <span className="px-1.5 py-0.2 bg-obsidian-500 border border-console-border text-emerald-400 font-mono text-xs rounded">
                           PCM 16,000 HZ • medical-v1
                         </span>
                       </div>
@@ -1284,12 +1303,12 @@ export default function MediScribeConsole() {
                           ? 'bg-slate-700 text-slate-400 cursor-not-allowed border border-slate-600'
                           : scribeStatus !== 'disconnected'
                           ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
-                          : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black shadow-lg shadow-cyan-500/20'
+                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-lg shadow-emerald-500/20'
                       }`}
                     >
                       {scribeStatus === 'connecting' ? (
                         <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" /> Connecting Scribe...
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" /> Connecting Scribe...
                         </>
                       ) : scribeStatus !== 'disconnected' ? (
                         <>
@@ -1324,7 +1343,7 @@ export default function MediScribeConsole() {
                       <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
                         <Radio className="w-6 h-6 mb-2 text-slate-600" />
                         <p className="text-xs font-bold text-slate-400">Ambient audio feed ready for {activeEncounter.patientName}.</p>
-                        <p className="text-[11px] text-slate-600 mt-1 max-w-sm font-sans">
+                        <p className="text-xs text-slate-600 mt-1 max-w-sm font-sans">
                           Click &quot;Start Ambient Scribe&quot; to capture consultation speech with doctor/patient diarization.
                         </p>
                       </div>
@@ -1335,16 +1354,16 @@ export default function MediScribeConsole() {
                           className={`p-3 rounded border text-xs leading-relaxed ${
                             turn.speaker === 'Doctor'
                               ? 'bg-obsidian-300 border-console-border text-slate-200 mr-6'
-                              : 'bg-cyan-950/30 border-cyan-700/40 text-cyan-100 ml-6'
+                              : 'bg-slate-800/40 border-slate-600/50 text-slate-100 ml-6'
                           }`}
                         >
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
-                            <span className={turn.speaker === 'Doctor' ? 'text-teal-400 font-bold' : 'text-cyan-300 font-bold'}>
-                              {turn.speaker.toUpperCase()}
+                          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                            <span className={turn.speaker === 'Doctor' ? 'text-emerald-400 font-bold' : 'text-slate-300 font-bold'}>
+                              {turn.speaker === 'Unknown' ? 'IDENTIFYING SPEAKER...' : turn.speaker.toUpperCase()}
                             </span>
-                            <span className="num-data">{turn.timestamp}</span>
+                            <span className="num-data">{turn.isFinal ? turn.timestamp : 'LIVE'}</span>
                           </div>
-                          <p className="font-sans text-xs text-slate-300">{turn.text}</p>
+                          <p className={`font-sans text-sm ${turn.isFinal ? 'text-slate-200' : 'text-slate-400 italic'}`}>{turn.text}</p>
                         </div>
                       ))
                     )}
@@ -1365,23 +1384,34 @@ export default function MediScribeConsole() {
 
                   {/* Compile Action Bar */}
                   <div className="flex flex-wrap items-center justify-between pt-2 border-t border-console-border gap-2 text-xs">
-                    <span className="text-slate-500 font-mono text-[11px]">
+                    <span className="text-slate-500 font-mono text-xs">
                       {activeEncounter.patientName} &bull;{' '}
                       {activeEncounter.scribeDialogue.length > 0
-                        ? `${activeEncounter.scribeDialogue.length} consultation turns recorded`
+                        ? `${activeEncounter.scribeDialogue.filter(d => d.isFinal).length} consultation turns recorded`
                         : activeEncounter.voiceDialogue.length > 0
                         ? `${activeEncounter.voiceDialogue.length} voice turns recorded`
                         : activeEncounter.toolEvents.length > 0
                         ? `${activeEncounter.toolEvents.length} clinical triage events recorded`
                         : '0 consultation turns recorded'}
                     </span>
-                    <button
-                      onClick={() => handleGenerateSoapNote('ambient-scribe')}
-                      disabled={isGeneratingSoap}
-                      className="btn-hardware px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {isGeneratingSoap ? 'Compiling SOAP...' : 'Compile SOAP Documentation'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {activeEncounter.scribeDialogue.length > 0 && (
+                        <button
+                          onClick={handleSwapSpeakers}
+                          className="btn-hardware px-3 py-2 bg-console-elevated hover:bg-console-highlight border border-console-border text-slate-300 font-mono text-xs rounded uppercase tracking-wider"
+                          title="Use this if the patient spoke first"
+                        >
+                          Swap Doctor / Patient
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleGenerateSoapNote('ambient-scribe')}
+                        disabled={isGeneratingSoap}
+                        className="btn-hardware px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono text-xs font-bold rounded uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {isGeneratingSoap ? 'Compiling SOAP...' : 'Compile SOAP Documentation'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1395,7 +1425,7 @@ export default function MediScribeConsole() {
                       Clinical Event Audit Ledger &bull; {activeEncounter.patientName}
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono text-slate-500 num-data">
+                  <span className="text-xs font-mono text-slate-500 num-data">
                     {activeEncounter.toolEvents.length} DISPATCHED
                   </span>
                 </div>
@@ -1428,31 +1458,31 @@ export default function MediScribeConsole() {
               {/* Active Patient Chart Card */}
               <div className="bg-console-surface border border-console-border rounded-xl p-5 font-mono text-xs space-y-3">
                 <div className="flex items-center justify-between border-b border-console-border pb-3">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Active Chart Dossier</span>
+                  <span className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Active Chart Dossier</span>
                   <span className="text-slate-100 font-bold">{activeEncounter.patientName}</span>
                 </div>
 
                 <div>
-                  <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">
+                  <div className="text-xs text-slate-500 uppercase tracking-wider mb-2">
                     Reconciled Home Medications
                   </div>
                   {activeEncounter.patientMeds.length === 0 ? (
-                    <div className="p-2 bg-obsidian-500 border border-console-border rounded text-[11px] text-slate-500 italic">
+                    <div className="p-2 bg-obsidian-500 border border-console-border rounded text-xs text-slate-500 italic">
                       No home medications recorded yet.
                     </div>
                   ) : (
                     <div className="space-y-1.5">
                       {activeEncounter.patientMeds.map((med, idx) => (
-                        <div key={idx} className="p-2 bg-obsidian-500 border border-console-border rounded flex items-center justify-between text-[11px]">
+                        <div key={idx} className="p-2 bg-obsidian-500 border border-console-border rounded flex items-center justify-between text-xs">
                           <span className="text-slate-300">{med}</span>
-                          <span className="text-[9px] text-emerald-400 font-semibold">RX-ACTIVE</span>
+                          <span className="text-xs text-emerald-400 font-semibold">RX-ACTIVE</span>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                <div className="pt-3 border-t border-console-border text-[10px] text-slate-500 space-y-1">
+                <div className="pt-3 border-t border-console-border text-xs text-slate-500 space-y-1">
                   <div className="flex justify-between">
                     <span>RECORD IDENTIFIER:</span>
                     <span className="text-slate-300">{activeEncounter.mrn}</span>
@@ -1472,12 +1502,58 @@ export default function MediScribeConsole() {
         </div>
       </section>
 
+      {/* ACTION: CLINICAL SOAP DOCUMENTATION & FHIR V4 */}
+      <section id="soap" className="py-20 sm:py-28 border-t border-console-border max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+        <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <div className="font-mono text-xs text-emerald-400 uppercase font-bold tracking-wider">
+              CHAPTER 02 / CLINICAL OUTPUT
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
+              Source-Linked SOAP Note: {activeEncounter.patientName}
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl font-sans">
+              Every line links to the transcript turn it came from. Items without a source are flagged. Nothing is final until a clinician signs. Exports as an HL7 FHIR R4 bundle for {activeEncounter.mrn}.
+            </p>
+          </div>
+
+          <button
+            onClick={() => handleGenerateSoapNote()}
+            disabled={isGeneratingSoap}
+            className="btn-hardware px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-2 self-start md:self-auto disabled:opacity-50"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>{isGeneratingSoap ? 'Synthesizing...' : `Compile SOAP for ${activeEncounter.patientName}`}</span>
+          </button>
+        </div>
+
+        {compileWarning && (
+          <div className="mb-6 p-3.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="font-sans leading-relaxed">
+              <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
+                Documentation Prerequisite Missing
+              </span>
+              {compileWarning}
+            </div>
+          </div>
+        )}
+
+        <SoapNoteViewer
+          soapNote={activeEncounter.soapNote}
+          onGenerateNew={() => handleGenerateSoapNote()}
+          onSign={handleSignSoapNote}
+          isLoading={isGeneratingSoap}
+          warning={compileWarning}
+        />
+      </section>
+
       {/* ENCOUNTER RECORDS & SHIFT AUDIT LEDGER */}
       <section id="records" className="py-16 sm:py-24 border-t border-console-border bg-obsidian-400/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
             <div>
-              <div className="font-mono text-[11px] text-emerald-400 uppercase font-bold tracking-wider">
+              <div className="font-mono text-xs text-emerald-400 uppercase font-bold tracking-wider">
                 SHIFT RECORDS &bull; AUDIT ARCHIVE
               </div>
               <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
@@ -1499,7 +1575,7 @@ export default function MediScribeConsole() {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-console-border bg-obsidian-500/80 text-[10px] text-slate-400 uppercase tracking-wider">
+                  <tr className="border-b border-console-border bg-obsidian-500/80 text-xs text-slate-400 uppercase tracking-wider">
                     <th className="p-3.5">MRN / ID</th>
                     <th className="p-3.5">PATIENT &amp; DEMOGRAPHICS</th>
                     <th className="p-3.5">BED</th>
@@ -1524,16 +1600,16 @@ export default function MediScribeConsole() {
                       >
                         <td className="p-3.5 font-bold text-slate-200">
                           <div>{enc.mrn}</div>
-                          <div className="text-[10px] text-slate-500">{enc.id}</div>
+                          <div className="text-xs text-slate-500">{enc.id}</div>
                         </td>
                         <td className="p-3.5 font-sans">
                           <div className="font-bold text-slate-100">{enc.patientName}</div>
-                          <div className="text-[11px] text-slate-400 truncate max-w-xs">{enc.chiefComplaint}</div>
+                          <div className="text-xs text-slate-400 truncate max-w-xs">{enc.chiefComplaint}</div>
                         </td>
                         <td className="p-3.5 font-bold text-slate-200">{enc.bed}</td>
                         <td className="p-3.5">
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
                               enc.esiScore.includes('ESI-1')
                                 ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                                 : enc.esiScore.includes('ESI-2')
@@ -1546,7 +1622,7 @@ export default function MediScribeConsole() {
                         </td>
                         <td className="p-3.5">
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
                               enc.status === 'Completed'
                                 ? 'bg-slate-800 text-slate-400'
                                 : 'bg-emerald-500/20 text-emerald-400'
@@ -1557,19 +1633,19 @@ export default function MediScribeConsole() {
                         </td>
                         <td className="p-3.5">
                           {hasAlert ? (
-                            <span className="text-red-400 flex items-center gap-1 text-[11px]">
+                            <span className="text-red-400 flex items-center gap-1 text-xs">
                               <ShieldAlert className="w-3.5 h-3.5" />
                               <span>Hazard Logged</span>
                             </span>
                           ) : (
-                            <span className="text-slate-500 text-[11px]">None</span>
+                            <span className="text-slate-500 text-xs">None</span>
                           )}
                         </td>
                         <td className="p-3.5">
                           {enc.soapNote ? (
-                            <span className="text-emerald-400 font-bold text-[11px]">SOAP READY</span>
+                            <span className="text-emerald-400 font-bold text-xs">SOAP READY</span>
                           ) : (
-                            <span className="text-slate-500 text-[11px]">Pending</span>
+                            <span className="text-slate-500 text-xs">Pending</span>
                           )}
                         </td>
                         <td className="p-3.5 text-right">
@@ -1580,7 +1656,7 @@ export default function MediScribeConsole() {
                                 const cp = document.getElementById('cockpit');
                                 if (cp) cp.scrollIntoView({ behavior: 'smooth' });
                               }}
-                              className={`btn-hardware px-3 py-1 rounded text-[11px] font-bold uppercase tracking-wider ${
+                              className={`btn-hardware px-3 py-1 rounded text-xs font-bold uppercase tracking-wider ${
                                 isSelected
                                   ? 'bg-emerald-500 text-slate-950'
                                   : 'bg-obsidian-500 hover:bg-console-highlight border border-console-border text-slate-300'
@@ -1610,8 +1686,8 @@ export default function MediScribeConsole() {
       {/* INTEREST: GAPLESS BENTO GRID (ARCHITECTURE & PHARMACOLOGY) */}
       <section id="bento" className="py-20 sm:py-28 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-12">
-          <div className="font-mono text-[11px] text-emerald-400 uppercase font-bold tracking-wider">
-            CHAPTER 02 / SYSTEM ARCHITECTURE
+          <div className="font-mono text-xs text-emerald-400 uppercase font-bold tracking-wider">
+            CHAPTER 03 / SYSTEM ARCHITECTURE
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
             Engineered for High-Acuity Triage
@@ -1623,17 +1699,11 @@ export default function MediScribeConsole() {
 
         {/* Dense Bento Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {/* Tile 1: Surgical Photography / Zero-Latency Barge-in (Span 2 cols on lg) */}
+          {/* Tile 1: Barge-in handling (Span 2 cols on lg) */}
           <div className="lg:col-span-2 relative rounded-2xl overflow-hidden border border-console-border bg-obsidian-400 min-h-[340px] flex flex-col justify-between p-6 sm:p-8">
-            <img
-              src="https://images.unsplash.com/photo-1516549655169-df83a0774514?auto=format&fit=crop&w=1200&q=80"
-              alt="Clinical Operating Environment"
-              className="absolute inset-0 w-full h-full object-cover grayscale contrast-125 opacity-20 mix-blend-luminosity pointer-events-none"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-obsidian-500 via-obsidian-500/80 to-transparent pointer-events-none" />
 
             <div className="relative z-10 space-y-2">
-              <span className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-[10px] uppercase font-bold tracking-wider">
+              <span className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-xs uppercase font-bold tracking-wider">
                 Full Duplex Barge-In Engine
               </span>
               <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
@@ -1648,15 +1718,15 @@ export default function MediScribeConsole() {
 
               <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-2">
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
-                  <div className="text-[10px] text-slate-500">BUFFER FLUSH</div>
+                  <div className="text-xs text-slate-500">BUFFER FLUSH</div>
                   <div className="text-slate-100 font-bold">ON BARGE-IN</div>
                 </div>
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
-                  <div className="text-[10px] text-slate-500">SAMPLE FORMAT</div>
+                  <div className="text-xs text-slate-500">SAMPLE FORMAT</div>
                   <div className="text-slate-100 font-bold">24kHz PCM16</div>
                 </div>
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
-                  <div className="text-[10px] text-slate-500">VAD SENSITIVITY</div>
+                  <div className="text-xs text-slate-500">VAD SENSITIVITY</div>
                   <div className="text-emerald-400 font-bold num-data">0.5 THRESHOLD</div>
                 </div>
               </div>
@@ -1667,7 +1737,7 @@ export default function MediScribeConsole() {
           <div className="rounded-2xl border border-console-border bg-console-surface p-6 flex flex-col justify-between space-y-4">
             <div>
               <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 font-bold">
+                <span className="text-xs font-mono uppercase tracking-wider text-amber-400 font-bold">
                   Clinical Stratification
                 </span>
                 <ShieldAlert className="w-4 h-4 text-amber-400" />
@@ -1678,7 +1748,7 @@ export default function MediScribeConsole() {
               </p>
             </div>
 
-            <div className="space-y-2 font-mono text-[11px]">
+            <div className="space-y-2 font-mono text-xs">
               <div className="p-2 rounded bg-red-950/30 border border-red-500/40 flex justify-between items-center text-red-300">
                 <span className="font-bold">ESI-1 RESUSCITATION</span>
                 <span>Immediate</span>
@@ -1698,7 +1768,7 @@ export default function MediScribeConsole() {
           <div id="rxnorm" className="lg:col-span-2 rounded-2xl border border-console-border bg-console-surface p-6 sm:p-8 space-y-5">
             <div className="flex items-center justify-between border-b border-console-border pb-4">
               <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-bold">
+                <span className="text-xs font-mono uppercase tracking-wider text-emerald-400 font-bold">
                   Clinical Pharmacology Engine
                 </span>
                 <h3 className="text-lg font-bold text-white mt-0.5">Drug Interaction Inspector</h3>
@@ -1711,7 +1781,7 @@ export default function MediScribeConsole() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs">
               <div>
-                <label className="text-[10px] text-slate-400 uppercase block mb-1">Medication Alpha</label>
+                <label className="text-xs text-slate-400 uppercase block mb-1">Medication Alpha</label>
                 <input
                   type="text"
                   value={drugA}
@@ -1720,7 +1790,7 @@ export default function MediScribeConsole() {
                 />
               </div>
               <div>
-                <label className="text-[10px] text-slate-400 uppercase block mb-1">Medication Beta</label>
+                <label className="text-xs text-slate-400 uppercase block mb-1">Medication Beta</label>
                 <input
                   type="text"
                   value={drugB}
@@ -1731,7 +1801,7 @@ export default function MediScribeConsole() {
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5 font-mono">
-              <span className="text-[10px] text-slate-500 py-1">PRESET PAIRS:</span>
+              <span className="text-xs text-slate-500 py-1">PRESET PAIRS:</span>
               {[
                 ['Warfarin', 'Aspirin'],
                 ['Sildenafil', 'Nitroglycerin'],
@@ -1741,7 +1811,7 @@ export default function MediScribeConsole() {
                 <button
                   key={idx}
                   onClick={() => { setDrugA(a); setDrugB(b); }}
-                  className="btn-hardware px-2 py-1 bg-obsidian-500 hover:bg-console-highlight border border-console-border text-slate-300 text-[10px] rounded"
+                  className="btn-hardware px-2 py-1 bg-obsidian-500 hover:bg-console-highlight border border-console-border text-slate-300 text-xs rounded"
                 >
                   {a} + {b}
                 </button>
@@ -1765,8 +1835,8 @@ export default function MediScribeConsole() {
                           <span>{it.severity}</span>
                           <span>{it.drugA} + {it.drugB}</span>
                         </div>
-                        <p className="text-[11px] leading-relaxed font-sans text-red-300/90">{it.mechanism}</p>
-                        <div className="text-[10px] text-red-400 pt-1 border-t border-red-500/20">
+                        <p className="text-xs leading-relaxed font-sans text-red-300/90">{it.mechanism}</p>
+                        <div className="text-xs text-red-400 pt-1 border-t border-red-500/20">
                           DIRECTIVE: {it.clinicalRecommendation}
                         </div>
                       </div>
@@ -1786,10 +1856,10 @@ export default function MediScribeConsole() {
           <div className="rounded-2xl border border-console-border bg-console-surface p-6 flex flex-col justify-between space-y-4">
             <div>
               <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-bold">
+                <span className="text-xs font-mono uppercase tracking-wider text-emerald-400 font-bold">
                   Acoustic Architecture
                 </span>
-                <Radio className="w-4 h-4 text-cyan-400" />
+                <Radio className="w-4 h-4 text-emerald-400" />
               </div>
               <h3 className="text-base font-bold text-white">medical-v1 Domain Diarization</h3>
               <p className="text-xs text-slate-400 mt-1 font-sans leading-relaxed">
@@ -1797,10 +1867,10 @@ export default function MediScribeConsole() {
               </p>
             </div>
 
-            <div className="p-3 bg-obsidian-500 border border-console-border rounded-lg font-mono text-[11px] space-y-2 text-slate-400">
+            <div className="p-3 bg-obsidian-500 border border-console-border rounded-lg font-mono text-xs space-y-2 text-slate-400">
               <div className="flex items-center justify-between text-slate-300">
                 <span>SPEAKER LABELS:</span>
-                <span className="text-cyan-400">Doctor • Patient</span>
+                <span className="text-emerald-400">Doctor • Patient</span>
               </div>
               <div className="flex items-center justify-between text-slate-300">
                 <span>TERMINOLOGY:</span>
@@ -1815,51 +1885,6 @@ export default function MediScribeConsole() {
         </div>
       </section>
 
-      {/* ACTION: CLINICAL SOAP DOCUMENTATION & FHIR V4 */}
-      <section id="soap" className="py-20 sm:py-28 border-t border-console-border max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
-        <div className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
-          <div>
-            <div className="font-mono text-[11px] text-emerald-400 uppercase font-bold tracking-wider">
-              CHAPTER 03 / CLINICAL OUTPUT
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">
-              Automated SOAP Synthesis &amp; HL7 FHIR v4: {activeEncounter.patientName}
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl font-sans">
-              Transforming unstructured spoken dialogue into structured clinical progress notes with ICD-10 codification and HL7 FHIR Bundle interoperability. Each note is tied directly to {activeEncounter.mrn}.
-            </p>
-          </div>
-
-          <button
-            onClick={() => handleGenerateSoapNote()}
-            disabled={isGeneratingSoap}
-            className="btn-hardware px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-2 self-start md:self-auto disabled:opacity-50"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>{isGeneratingSoap ? 'Synthesizing...' : `Compile SOAP for ${activeEncounter.patientName}`}</span>
-          </button>
-        </div>
-
-        {compileWarning && (
-          <div className="mb-6 p-3.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-xs text-amber-200 flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div className="font-sans leading-relaxed">
-              <span className="font-bold font-mono uppercase text-amber-300 block mb-0.5">
-                Documentation Prerequisite Missing
-              </span>
-              {compileWarning}
-            </div>
-          </div>
-        )}
-
-        <SoapNoteViewer
-          soapNote={activeEncounter.soapNote}
-          onGenerateNew={() => handleGenerateSoapNote()}
-          isLoading={isGeneratingSoap}
-          warning={compileWarning}
-        />
-      </section>
-
       {/* HARDWARE TELEMETRY FOOTER */}
       <footer className="border-t border-console-border bg-obsidian-400 py-6 text-xs font-mono text-slate-500 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -1870,12 +1895,12 @@ export default function MediScribeConsole() {
             <span>ASSEMBLYAI VOICE AGENT HACKATHON</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400">
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
             <span>Universal-3.5 Pro</span>
             <span>•</span>
             <span>domain: medical-v1</span>
             <span>•</span>
-            <span>HL7 FHIR v4</span>
+            <span>HL7 FHIR R4</span>
             <span>•</span>
             <span>Multi-Patient Triage Queue</span>
           </div>

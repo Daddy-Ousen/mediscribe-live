@@ -10,6 +10,8 @@ export interface VoiceAgentCallbacks {
   onToolCall?: (event: ToolExecutionEvent) => void;
   onVolumeChange?: (volume: number) => void;
   onAutoClose?: (reason: string) => void;
+  // Milliseconds from the server's end-of-speech event to the first agent audio chunk, measured in the browser
+  onLatency?: (ms: number) => void;
   onError?: (error: string) => void;
 }
 
@@ -21,6 +23,7 @@ export class VoiceAgentClient {
   private callbacks: VoiceAgentCallbacks;
   private currentAgentReply: string = '';
   private shouldAutoClose: boolean = false;
+  private speechStoppedAt: number | null = null;
 
   constructor(callbacks: VoiceAgentCallbacks = {}) {
     this.callbacks = callbacks;
@@ -46,9 +49,13 @@ export class VoiceAgentClient {
       }
       const { token } = await tokenRes.json();
 
+      // The user pressed Stop while the token was loading: do not open an orphan session
+      if (this.disposed) return;
+
       // 2. Open WebSocket
       const wsUrl = `wss://agents.assemblyai.com/v1/ws?token=${token}`;
       this.ws = new WebSocket(wsUrl);
+      window.addEventListener('beforeunload', this.handleUnload);
 
       this.ws.onopen = () => {
         this.callbacks.onStatusChange?.('connected');
@@ -208,6 +215,7 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
           break;
 
         case 'input.speech.stopped':
+          this.speechStoppedAt = performance.now();
           break;
 
         case 'transcript.user.delta': {
@@ -234,6 +242,10 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
         case 'reply.audio':
           // Note field-name asymmetry: reply.audio payload is inside 'data'
           if (msg.data && this.player) {
+            if (this.speechStoppedAt !== null) {
+              this.callbacks.onLatency?.(Math.round(performance.now() - this.speechStoppedAt));
+              this.speechStoppedAt = null;
+            }
             this.player.playChunk(msg.data);
           }
           break;
@@ -390,11 +402,26 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
     }
   }
 
+  private handleUnload = () => this.disconnect();
+  private disposed: boolean = false;
+
   public disconnect() {
+    this.disposed = true;
     this.stopAudio();
+    window.removeEventListener('beforeunload', this.handleUnload);
     if (this.ws) {
+      const ws = this.ws;
+      // Detach handlers so a late close event cannot change the status of a newer session
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       try {
-        this.ws.close();
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => ws.close(1000);
+        } else {
+          ws.close(1000);
+        }
       } catch (e) {}
       this.ws = null;
     }

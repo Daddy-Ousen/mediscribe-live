@@ -15,6 +15,9 @@ export class PcmAudioRecorder {
   private processorNode: ScriptProcessorNode | null = null;
   private options: AudioRecorderOptions;
   private isRecording: boolean = false;
+  // Samples waiting to be sent. Frames are emitted at a fixed duration so the
+  // server always receives 50-1000 ms chunks, whatever the device sample rate.
+  private pending: Int16Array = new Int16Array(0);
 
   constructor(options: AudioRecorderOptions) {
     this.options = {
@@ -93,12 +96,22 @@ export class PcmAudioRecorder {
           }
         }
 
-        // Convert to Int16 PCM
-        const int16 = convertFloat32ToInt16(processedFloat32);
-        const base64 = int16ToBase64(int16);
-        const rawBytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+        // Convert to Int16 PCM and append to the pending buffer
+        const converted = convertFloat32ToInt16(processedFloat32);
+        const merged = new Int16Array(this.pending.length + converted.length);
+        merged.set(this.pending, 0);
+        merged.set(converted, this.pending.length);
 
-        this.options.onAudioChunk({ int16, base64, rawBytes });
+        const frameSamples = Math.round((this.options.targetSampleRate * (this.options.chunkDurationMs || 100)) / 1000);
+        let offset = 0;
+        while (merged.length - offset >= frameSamples) {
+          const int16 = merged.slice(offset, offset + frameSamples);
+          offset += frameSamples;
+          const base64 = int16ToBase64(int16);
+          const rawBytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+          this.options.onAudioChunk({ int16, base64, rawBytes });
+        }
+        this.pending = merged.slice(offset);
       };
 
       this.sourceNode.connect(this.processorNode);
@@ -116,6 +129,7 @@ export class PcmAudioRecorder {
 
   public stop(): void {
     this.isRecording = false;
+    this.pending = new Int16Array(0);
     this.cleanup();
     if (this.options.onVolumeChange) {
       this.options.onVolumeChange(0);
