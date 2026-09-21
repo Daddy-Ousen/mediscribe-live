@@ -23,7 +23,10 @@ export class StreamingTranscriptionClient {
     this.callbacks.onStatusChange?.('connecting');
 
     try {
-      // 1. Fetch short-lived token from backend with cache-busting query & no-store headers
+      // 1. Initialize microphone hardware first so browser permission is obtained before WS opens
+      await this.startMicrophone();
+
+      // 2. Fetch short-lived token from backend with cache-busting query & no-store headers
       const tokenRes = await fetch(`/api/token/streaming?t=${Date.now()}`, {
         cache: 'no-store',
         headers: {
@@ -37,14 +40,13 @@ export class StreamingTranscriptionClient {
       }
       const { token } = await tokenRes.json();
 
-      // 2. Open WebSocket to AssemblyAI Streaming Edge
-      const wsUrl = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&token=${token}`;
+      // 3. Open WebSocket to AssemblyAI Streaming Edge with medical-v1 domain & speaker diarization
+      const wsUrl = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&domain=medical-v1&speaker_labels=true&token=${token}`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         this.isConnected = true;
         this.callbacks.onStatusChange?.('connected');
-        this.startMicrophone();
       };
 
       this.ws.onmessage = (event) => {
@@ -53,7 +55,7 @@ export class StreamingTranscriptionClient {
 
       this.ws.onerror = (err) => {
         console.error('Streaming STT WebSocket error:', err);
-        this.callbacks.onError?.('Streaming STT connection error.');
+        this.callbacks.onError?.('Streaming STT connection error. Unable to reach AssemblyAI edge servers.');
       };
 
       this.ws.onclose = (ev) => {
@@ -61,11 +63,20 @@ export class StreamingTranscriptionClient {
         this.isConnected = false;
         this.stopMicrophone();
         this.callbacks.onStatusChange?.('disconnected');
-        if (ev.reason && (ev.reason.includes('expired') || ev.reason.includes('Unauthorized'))) {
+        if (ev.code !== 1000 && ev.code !== 1005) {
+          const detail = ev.reason ? `: ${ev.reason}` : ` (WebSocket code ${ev.code})`;
+          this.callbacks.onError?.(`Ambient Scribe connection closed unexpectedly${detail}. Check your microphone and network connection.`);
+        } else if (ev.reason && (ev.reason.includes('expired') || ev.reason.includes('Unauthorized'))) {
           this.callbacks.onError?.('Streaming token expired. Click Start Ambient Scribe to start a fresh session.');
         }
       };
     } catch (err: any) {
+      this.stopMicrophone();
+      if (this.ws) {
+        try { this.ws.close(); } catch (e) {}
+        this.ws = null;
+      }
+      this.isConnected = false;
       this.callbacks.onError?.(err?.message || 'Failed to connect to streaming service');
       this.callbacks.onStatusChange?.('disconnected');
       throw err;
@@ -132,7 +143,7 @@ export class StreamingTranscriptionClient {
       await this.recorder.start();
     } catch (e: any) {
       console.error('Failed to start microphone:', e);
-      this.callbacks.onError?.(`Microphone access error: ${e.message}`);
+      throw new Error(`Microphone initialization error: ${e.message || 'Microphone unavailable'}. Please verify browser microphone permissions.`);
     }
   }
 

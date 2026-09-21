@@ -31,7 +31,8 @@ import {
   BedDouble,
   RotateCcw,
   Sparkles,
-  Layers
+  Layers,
+  Loader2
 } from 'lucide-react';
 
 const INITIAL_ENCOUNTERS: PatientEncounter[] = [
@@ -77,10 +78,12 @@ export default function MediScribeConsole() {
 
   // Voice Agent State
   const [voiceStatus, setVoiceStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'listening' | 'speaking' | 'interrupted'>('disconnected');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const [volume, setVolume] = useState<number>(0);
 
   // Ambient Scribe State
   const [scribeStatus, setScribeStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'transcribing'>('disconnected');
+  const [scribeError, setScribeError] = useState<string | null>(null);
 
   // Clinical Summary State
   const [isGeneratingSoap, setIsGeneratingSoap] = useState(false);
@@ -335,10 +338,24 @@ export default function MediScribeConsole() {
   // 1. Toggle Voice Agent (Bedside Triage)
   const handleToggleVoiceAgent = async () => {
     setCompileWarning(null);
+    setVoiceError(null);
+
+    // Prevent double-click race condition
+    if (voiceStatus === 'connecting') {
+      return;
+    }
+
     if (voiceStatus !== 'disconnected') {
       voiceClientRef.current?.disconnect();
       setVoiceStatus('disconnected');
       return;
+    }
+
+    // Hardware Mutual Exclusion: Stop Ambient Scribe if active to release mic
+    if (scribeStatus !== 'disconnected') {
+      scribeClientRef.current?.disconnect();
+      setScribeStatus('disconnected');
+      setScribeError(null);
     }
 
     try {
@@ -352,6 +369,7 @@ export default function MediScribeConsole() {
         },
         onUserTranscript: (text, isFinal) => {
           setCompileWarning(null);
+          setVoiceError(null);
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.voiceDialogue];
             const last = currentDialogue[currentDialogue.length - 1];
@@ -554,24 +572,41 @@ export default function MediScribeConsole() {
           });
         },
         onError: (err) => {
-          alert(`Voice Agent Session Error: ${err}`);
+          console.error('Voice Agent error:', err);
+          setVoiceError(err);
+          setShiftAlertMessage(`Voice Agent: ${err}`);
         }
       });
 
       await voiceClientRef.current.connect();
     } catch (e: any) {
       console.error('Failed to initialize voice agent:', e);
-      alert(`Voice Agent Failure: ${e.message}`);
+      setVoiceError(e.message || 'Failed to initialize voice agent');
+      setVoiceStatus('disconnected');
     }
   };
 
   // 2. Toggle Ambient Scribe
   const handleToggleScribe = async () => {
     setCompileWarning(null);
+    setScribeError(null);
+
+    // Prevent double-click race condition
+    if (scribeStatus === 'connecting') {
+      return;
+    }
+
     if (scribeStatus !== 'disconnected') {
       scribeClientRef.current?.disconnect();
       setScribeStatus('disconnected');
       return;
+    }
+
+    // Hardware Mutual Exclusion: Stop Bedside Voice Agent if active to release mic
+    if (voiceStatus !== 'disconnected') {
+      voiceClientRef.current?.disconnect();
+      setVoiceStatus('disconnected');
+      setVoiceError(null);
     }
 
     try {
@@ -580,6 +615,7 @@ export default function MediScribeConsole() {
         onVolumeChange: (vol) => setVolume(vol),
         onTurn: (turn) => {
           setCompileWarning(null);
+          setScribeError(null);
           updateActiveEncounter(prev => {
             const currentDialogue = [...prev.scribeDialogue];
             const last = currentDialogue[currentDialogue.length - 1];
@@ -666,6 +702,7 @@ export default function MediScribeConsole() {
         },
         onError: (err) => {
           console.error('Streaming STT error:', err);
+          setScribeError(err);
           setShiftAlertMessage(`Ambient Scribe: ${err}`);
         }
       });
@@ -673,7 +710,8 @@ export default function MediScribeConsole() {
       await scribeClientRef.current.connect();
     } catch (e: any) {
       console.error('Failed to initialize ambient scribe:', e);
-      alert(`Streaming Failure: ${e.message}`);
+      setScribeError(e.message || 'Failed to initialize ambient scribe');
+      setScribeStatus('disconnected');
     }
   };
 
@@ -1126,6 +1164,11 @@ export default function MediScribeConsole() {
                 onClick={() => {
                   setCockpitMode('voice-agent');
                   setCompileWarning(null);
+                  if (scribeStatus !== 'disconnected') {
+                    scribeClientRef.current?.disconnect();
+                    setScribeStatus('disconnected');
+                    setScribeError(null);
+                  }
                 }}
                 className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                   cockpitMode === 'voice-agent'
@@ -1140,6 +1183,11 @@ export default function MediScribeConsole() {
                 onClick={() => {
                   setCockpitMode('ambient-scribe');
                   setCompileWarning(null);
+                  if (voiceStatus !== 'disconnected') {
+                    voiceClientRef.current?.disconnect();
+                    setVoiceStatus('disconnected');
+                    setVoiceError(null);
+                  }
                 }}
                 className={`px-3.5 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                   cockpitMode === 'ambient-scribe'
@@ -1177,13 +1225,20 @@ export default function MediScribeConsole() {
 
                     <button
                       onClick={handleToggleVoiceAgent}
-                      className={`btn-hardware px-4 py-2 rounded text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 ${
-                        voiceStatus !== 'disconnected'
-                          ? 'bg-red-500 hover:bg-red-600 text-white'
-                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black'
+                      disabled={voiceStatus === 'connecting'}
+                      className={`btn-hardware px-4 py-2 rounded text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all ${
+                        voiceStatus === 'connecting'
+                          ? 'bg-slate-700 text-slate-400 cursor-not-allowed border border-slate-600'
+                          : voiceStatus !== 'disconnected'
+                          ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
+                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black shadow-lg shadow-emerald-500/20'
                       }`}
                     >
-                      {voiceStatus !== 'disconnected' ? (
+                      {voiceStatus === 'connecting' ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" /> Connecting Agent...
+                        </>
+                      ) : voiceStatus !== 'disconnected' ? (
                         <>
                           <MicOff className="w-3.5 h-3.5" /> Disconnect Session
                         </>
@@ -1194,6 +1249,19 @@ export default function MediScribeConsole() {
                       )}
                     </button>
                   </div>
+
+                  {/* Hardware Connection Error Banner */}
+                  {voiceError && (
+                    <div className="p-3 bg-red-950/40 border border-red-500/50 rounded-lg text-xs text-red-200 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                      <div className="font-sans leading-relaxed">
+                        <span className="font-bold font-mono uppercase text-red-300 block mb-0.5">
+                          Voice Agent Hardware / Connection Alert
+                        </span>
+                        {voiceError}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Hardware VU Meter */}
                   <AudioWaveform status={voiceStatus} volume={volume} sampleRate={24000} />
@@ -1284,13 +1352,20 @@ export default function MediScribeConsole() {
 
                     <button
                       onClick={handleToggleScribe}
-                      className={`btn-hardware px-4 py-2 rounded text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 ${
-                        scribeStatus !== 'disconnected'
-                          ? 'bg-red-500 hover:bg-red-600 text-white'
-                          : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black'
+                      disabled={scribeStatus === 'connecting'}
+                      className={`btn-hardware px-4 py-2 rounded text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all ${
+                        scribeStatus === 'connecting'
+                          ? 'bg-slate-700 text-slate-400 cursor-not-allowed border border-slate-600'
+                          : scribeStatus !== 'disconnected'
+                          ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
+                          : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black shadow-lg shadow-cyan-500/20'
                       }`}
                     >
-                      {scribeStatus !== 'disconnected' ? (
+                      {scribeStatus === 'connecting' ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" /> Connecting Scribe...
+                        </>
+                      ) : scribeStatus !== 'disconnected' ? (
                         <>
                           <MicOff className="w-3.5 h-3.5" /> Stop Ambient Scribe
                         </>
@@ -1301,6 +1376,19 @@ export default function MediScribeConsole() {
                       )}
                     </button>
                   </div>
+
+                  {/* Hardware Connection Error Banner */}
+                  {scribeError && (
+                    <div className="p-3 bg-red-950/40 border border-red-500/50 rounded-lg text-xs text-red-200 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                      <div className="font-sans leading-relaxed">
+                        <span className="font-bold font-mono uppercase text-red-300 block mb-0.5">
+                          Ambient Scribe Audio Hardware &amp; Connection Alert
+                        </span>
+                        {scribeError}
+                      </div>
+                    </div>
+                  )}
 
                   <AudioWaveform status={scribeStatus} volume={volume} sampleRate={16000} />
 

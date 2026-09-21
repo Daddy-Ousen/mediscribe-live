@@ -69,6 +69,10 @@ export class VoiceAgentClient {
         this.isReady = false;
         this.stopAudio();
         this.callbacks.onStatusChange?.('disconnected');
+        if (ev.code !== 1000 && ev.code !== 1005) {
+          const detail = ev.reason ? `: ${ev.reason}` : ` (WebSocket code ${ev.code})`;
+          this.callbacks.onError?.(`Bedside Voice Agent session closed unexpectedly${detail}. Check your network and microphone connection.`);
+        }
       };
     } catch (err: any) {
       this.callbacks.onError?.(err?.message || 'Connection failed');
@@ -381,7 +385,8 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
       await this.recorder.start();
     } catch (e: any) {
       console.error('Failed to start microphone:', e);
-      this.callbacks.onError?.(`Could not access microphone: ${e.message}`);
+      this.callbacks.onError?.(`Could not access microphone: ${e.message}. Please check browser microphone permissions.`);
+      this.disconnect();
     }
   }
 

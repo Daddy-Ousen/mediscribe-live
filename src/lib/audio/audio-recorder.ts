@@ -27,16 +27,28 @@ export class PcmAudioRecorder {
     if (this.isRecording) return;
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      if (typeof window === 'undefined' || !navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone access is not supported or blocked in this browser environment.');
+      }
+
+      try {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (constraintErr) {
+        console.warn('getUserMedia with constraints failed, falling back to basic audio capture:', constraintErr);
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
 
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtxClass) {
+        throw new Error('Web Audio API (AudioContext) is not supported in this browser.');
+      }
       this.audioCtx = new AudioCtxClass();
 
       if (this.audioCtx.state === 'suspended') {
