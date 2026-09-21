@@ -28,7 +28,7 @@ export const SoapNoteViewer: React.FC<SoapNoteViewerProps> = ({
         </div>
         <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200">No Clinical Note Compiled</h3>
         <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 mb-6 font-sans leading-relaxed">
-          Record a bedside intake or ambient consultation session. MediScribe compiles standardized SOAP documentation with verified ICD-10 diagnostic coding and HL7 FHIR v4 serialization.
+          Record a bedside intake or ambient consultation session. MediScribe drafts a SOAP note from what was actually said. Anything not discussed is marked as such. The draft needs clinician review before signing.
         </p>
 
         {warning && (
@@ -76,14 +76,14 @@ ${Object.entries(soapNote.objective.vitalSigns).map(([k, v]) => `  * ${k}: ${v}`
 ${soapNote.objective.physicalExam.map(p => `  * ${p}`).join('\n')}
 
 III. ASSESSMENT
-- Primary Diagnosis: ${soapNote.assessment.primaryDiagnosis} [ICD-10: ${soapNote.assessment.icd10Code}]
-- Differential Diagnoses: ${soapNote.assessment.differentialDiagnoses.map(d => `${d.diagnosis} (${d.icd10})`).join(', ')}
+- Primary Diagnosis: ${soapNote.assessment.primaryDiagnosis}${soapNote.assessment.icd10Code ? ` [ICD-10: ${soapNote.assessment.icd10Code}]` : ''}
+- AI-Suggested Differentials (unconfirmed): ${soapNote.assessment.differentialDiagnoses.map(d => `${d.diagnosis} (${d.icd10})`).join(', ') || 'None'}
 - Clinical Rationale: ${soapNote.assessment.clinicalRationale}
 
 IV. PLAN & DISPOSITION
 - Prescribed Therapeutics:
-${soapNote.plan.medicationsPrescribed.map(m => `  * ${m.name} ${m.dosage}: ${m.instructions}`).join('\n')}
-- Diagnostic Orders: ${soapNote.plan.diagnosticsOrdered.join('; ')}
+${soapNote.plan.medicationsPrescribed.map(m => `  * ${m.name} ${m.dosage}: ${m.instructions}`).join('\n') || '  * None stated in dialogue'}
+- Diagnostic Orders: ${soapNote.plan.diagnosticsOrdered.join('; ') || 'None stated in dialogue'}
 - Nursing Directives: ${soapNote.plan.patientInstructions}
 - Re-evaluation: ${soapNote.plan.followUp}
     `.trim();
@@ -209,16 +209,19 @@ ${soapNote.plan.medicationsPrescribed.map(m => `  * ${m.name} ${m.dosage}: ${m.i
           <div className="p-3 bg-obsidian-500 border border-console-border rounded-lg text-xs space-y-1.5">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="font-bold text-slate-100">{soapNote.assessment.primaryDiagnosis}</span>
-              <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-bold rounded">
-                ICD-10-CM: {soapNote.assessment.icd10Code}
-              </span>
+              {soapNote.assessment.icd10Code && (
+                <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-bold rounded">
+                  ICD-10-CM: {soapNote.assessment.icd10Code}
+                </span>
+              )}
             </div>
             <p className="text-slate-400 text-xs leading-relaxed">
               {soapNote.assessment.clinicalRationale}
             </p>
           </div>
           <div className="text-xs text-slate-400 font-mono flex flex-wrap gap-2 pt-1">
-            <span className="text-slate-500">DIFFERENTIAL:</span>
+            <span className="text-slate-500">AI-SUGGESTED DIFFERENTIAL (UNCONFIRMED):</span>
+            {soapNote.assessment.differentialDiagnoses.length === 0 && <span className="text-slate-500">None</span>}
             {soapNote.assessment.differentialDiagnoses.map((diff, i) => (
               <span key={i} className="text-slate-300">
                 {diff.diagnosis} [{diff.icd10}]
@@ -240,10 +243,13 @@ ${soapNote.plan.medicationsPrescribed.map(m => `  * ${m.name} ${m.dosage}: ${m.i
                   <div className="text-slate-400 text-[11px]">{med.instructions}</div>
                 </div>
               ))}
+              {soapNote.plan.medicationsPrescribed.length === 0 && (
+                <div className="p-2.5 bg-obsidian-500 border border-console-border rounded text-slate-500">No medications stated in dialogue</div>
+              )}
             </div>
             <div className="text-slate-400 pt-1">
               <span className="font-mono text-[11px] text-slate-500 block">DIAGNOSTIC ORDERS:</span>
-              <span className="text-slate-200">{soapNote.plan.diagnosticsOrdered.join(' • ')}</span>
+              <span className="text-slate-200">{soapNote.plan.diagnosticsOrdered.join(' • ') || 'None stated in dialogue'}</span>
             </div>
             <div className="p-2.5 bg-obsidian-500 border border-console-border rounded text-[11px] text-slate-300">
               <span className="font-mono text-slate-400 font-semibold block mb-0.5">PATIENT & NURSING DIRECTIVES:</span>
