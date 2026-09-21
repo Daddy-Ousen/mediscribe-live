@@ -515,26 +515,6 @@ export default function MediScribeConsole() {
               if (Array.isArray(event.parameters?.medications) && event.parameters.medications.length > 0) {
                 newMeds = Array.from(new Set([...prev.patientMeds, ...event.parameters.medications]));
               }
-
-              // Guarantee authentic speech turns exist in the dialogue feed
-              if (updatedDialogue.length === 0) {
-                const p = event.parameters;
-                const details: string[] = [];
-                if (p?.chief_complaint) details.push(`Chief complaint: ${p.chief_complaint}.`);
-                if (p?.onset) details.push(`Onset: ${p.onset}.`);
-                if (p?.pain_scale !== undefined) details.push(`Pain scale rated at ${p.pain_scale}/10.`);
-                if (Array.isArray(p?.medications) && p.medications.length > 0) details.push(`Medications: ${p.medications.join(', ')}.`);
-                if (Array.isArray(p?.allergies) && p.allergies.length > 0) details.push(`Allergies: ${p.allergies.join(', ')}.`);
-                if (details.length > 0) {
-                  updatedDialogue.push({
-                    id: `intake-${Date.now()}`,
-                    speaker: 'Patient',
-                    text: details.join(' '),
-                    timestamp: new Date().toLocaleTimeString(),
-                    isFinal: true
-                  });
-                }
-              }
             } else if (event.toolName === 'confirm_and_close_session') {
               setShiftAlertMessage(`Intake confirmed by clinical agent. Closing voice session automatically.`);
               newStatus = 'Completed';
@@ -735,83 +715,23 @@ export default function MediScribeConsole() {
       }
     }
 
-    // If dialogue is still empty, reconstruct dialogue from authentic tool events or clinical chart intake
-    if (!sourceDialogue || sourceDialogue.length === 0) {
-      if (activeEncounter.toolEvents && activeEncounter.toolEvents.length > 0) {
-        // Reconstruct dialogue turns from authentic tool execution audit ledger
-        const reconstructed: DialogueTurn[] = [];
-        const identEvent = activeEncounter.toolEvents.find(e => e.toolName === 'set_patient_identity');
-        const intakeEvent = activeEncounter.toolEvents.find(e => e.toolName === 'record_patient_intake');
-        const closeEvent = activeEncounter.toolEvents.find(e => e.toolName === 'confirm_and_close_session');
-
-        const ptName = identEvent?.parameters?.patient_name || intakeEvent?.parameters?.patient_name || activeEncounter.patientName;
-        reconstructed.push({
-          id: `ident-${Date.now()}`,
-          speaker: 'Patient',
-          text: `My name is ${ptName}.`,
-          timestamp: identEvent?.timestamp || 'Initial Intake',
-          isFinal: true
-        });
-
-        if (intakeEvent?.parameters) {
-          const p = intakeEvent.parameters;
-          const details: string[] = [];
-          if (p.chief_complaint) details.push(`Chief complaint: ${p.chief_complaint}.`);
-          if (p.onset) details.push(`Onset: ${p.onset}.`);
-          if (p.pain_scale !== undefined) details.push(`Pain scale rated at ${p.pain_scale}/10.`);
-          if (Array.isArray(p.medications) && p.medications.length > 0) details.push(`Current medications: ${p.medications.join(', ')}.`);
-          if (Array.isArray(p.allergies) && p.allergies.length > 0) details.push(`Known allergies: ${p.allergies.join(', ')}.`);
-
-          reconstructed.push({
-            id: `intake-${Date.now()}`,
-            speaker: 'Patient',
-            text: details.join(' '),
-            timestamp: intakeEvent.timestamp || 'Triage Assessment',
-            isFinal: true
-          });
-        }
-
-        if (closeEvent?.parameters?.closing_summary) {
-          reconstructed.push({
-            id: `close-${Date.now()}`,
-            speaker: 'MediScribe AI',
-            text: closeEvent.parameters.closing_summary,
-            timestamp: closeEvent.timestamp || 'Session Concluded',
-            isFinal: true
-          });
-        }
-
-        if (reconstructed.length > 0) {
-          sourceDialogue = reconstructed;
-          updateActiveEncounter(prev => ({
-            ...prev,
-            voiceDialogue: reconstructed
-          }));
-        }
-      } else if (
-        activeEncounter.chiefComplaint &&
-        activeEncounter.chiefComplaint !== 'Awaiting bedside voice triage intake'
-      ) {
-        // Reconstruct from recorded chart intake
-        const reconstructed: DialogueTurn[] = [
-          {
-            id: `chart-pt-${Date.now()}`,
-            speaker: 'Patient',
-            text: `Chief complaint: ${activeEncounter.chiefComplaint}. Pain rating: ${activeEncounter.painScale}/10. Current medications: ${activeEncounter.patientMeds.join(', ') || 'None reported'}.`,
-            timestamp: 'Triage Assessment',
-            isFinal: true
-          }
-        ];
-        sourceDialogue = reconstructed;
-        updateActiveEncounter(prev => ({
-          ...prev,
-          voiceDialogue: reconstructed
-        }));
-      }
+    // Structured intake captured by voice agent tool calls. Labeled as chart data, never as patient speech.
+    const intakeEvent = activeEncounter.toolEvents.find(e => e.toolName === 'record_patient_intake');
+    const identEvent = activeEncounter.toolEvents.find(e => e.toolName === 'set_patient_identity');
+    const structuredIntake: string[] = [];
+    if (identEvent?.parameters?.patient_name) structuredIntake.push(`Name: ${identEvent.parameters.patient_name}`);
+    if (identEvent?.parameters?.age) structuredIntake.push(`Age: ${identEvent.parameters.age}`);
+    if (intakeEvent?.parameters) {
+      const p = intakeEvent.parameters;
+      if (p.chief_complaint) structuredIntake.push(`Chief complaint: ${p.chief_complaint}`);
+      if (p.onset) structuredIntake.push(`Onset: ${p.onset}`);
+      if (p.pain_scale !== undefined) structuredIntake.push(`Pain scale: ${p.pain_scale}/10`);
+      if (Array.isArray(p.medications) && p.medications.length > 0) structuredIntake.push(`Medications: ${p.medications.join(', ')}`);
+      if (Array.isArray(p.allergies) && p.allergies.length > 0) structuredIntake.push(`Allergies: ${p.allergies.join(', ')}`);
     }
 
     // Reject ONLY if genuine 0 data (no dialogue, no tool events, no intake)
-    if (!sourceDialogue || sourceDialogue.length === 0) {
+    if ((!sourceDialogue || sourceDialogue.length === 0) && structuredIntake.length === 0) {
       const modeName = forcedSource === 'ambient-scribe'
         ? 'Ambient Scribe'
         : forcedSource === 'voice-agent'
@@ -826,7 +746,13 @@ export default function MediScribeConsole() {
     setCompileWarning(null);
     setIsGeneratingSoap(true);
 
-    const effectiveTranscript = sourceDialogue.map((d) => `${d.speaker}: ${d.text}`).join('\n');
+    const dialogueText = (sourceDialogue || []).map((d) => `${d.speaker}: ${d.text}`).join('\n');
+    const effectiveTranscript = [
+      dialogueText,
+      structuredIntake.length > 0
+        ? `[Structured intake record from voice agent tool calls, not verbatim speech]\n${structuredIntake.join('\n')}`
+        : ''
+    ].filter(Boolean).join('\n\n');
 
     try {
       const res = await fetch('/api/soap/generate', {
@@ -934,12 +860,12 @@ export default function MediScribeConsole() {
               className="w-full h-full object-cover grayscale contrast-125 hover:grayscale-0 transition-all duration-700"
             />
           </span>{' '}
-          triage engineered for zero latency.
+          triage that documents only what was said.
         </h1>
 
         {/* Subtext under 20 words */}
         <p className="mt-6 text-sm sm:text-base text-slate-400 max-w-2xl leading-relaxed font-sans">
-          Autonomous bedside triage copilot and ambient medical scribe with sub-600ms latency and real-time pharmacology safeguards.
+          Bedside triage voice agent and ambient medical scribe. Real-time pharmacology checks. Every note is a draft for clinician review.
         </p>
 
         {/* Tactile Action Buttons */}
@@ -976,8 +902,8 @@ export default function MediScribeConsole() {
           </div>
 
           <div className="p-3 bg-obsidian-400/80 border border-console-border rounded-lg">
-            <div className="text-[10px] text-slate-500 uppercase">ROUNDTRIP LATENCY</div>
-            <div className="text-slate-200 font-bold mt-0.5 num-data">&lt; 600ms Time-to-Speech</div>
+            <div className="text-[10px] text-slate-500 uppercase">TURN-TAKING</div>
+            <div className="text-slate-200 font-bold mt-0.5">Neural VAD Turn Detection</div>
             <div className="text-[10px] text-cyan-400 mt-1">Instant Barge-In Flush</div>
           </div>
 
@@ -1723,7 +1649,7 @@ export default function MediScribeConsole() {
               <div className="grid grid-cols-3 gap-3 font-mono text-xs pt-2">
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
                   <div className="text-[10px] text-slate-500">BUFFER FLUSH</div>
-                  <div className="text-slate-100 font-bold num-data">0.00s LAG</div>
+                  <div className="text-slate-100 font-bold">ON BARGE-IN</div>
                 </div>
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
                   <div className="text-[10px] text-slate-500">SAMPLE FORMAT</div>
@@ -1731,7 +1657,7 @@ export default function MediScribeConsole() {
                 </div>
                 <div className="p-2.5 bg-obsidian-500/90 border border-console-border rounded">
                   <div className="text-[10px] text-slate-500">VAD SENSITIVITY</div>
-                  <div className="text-emerald-400 font-bold">DYNAMIC</div>
+                  <div className="text-emerald-400 font-bold num-data">0.5 THRESHOLD</div>
                 </div>
               </div>
             </div>
@@ -1768,16 +1694,16 @@ export default function MediScribeConsole() {
             </div>
           </div>
 
-          {/* Tile 3: Live Interactive RxNorm Sandbox (Span 2 cols on lg) */}
+          {/* Tile 3: Live Interactive Drug Interaction Sandbox (Span 2 cols on lg) */}
           <div id="rxnorm" className="lg:col-span-2 rounded-2xl border border-console-border bg-console-surface p-6 sm:p-8 space-y-5">
             <div className="flex items-center justify-between border-b border-console-border pb-4">
               <div>
                 <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-bold">
                   Clinical Pharmacology Engine
                 </span>
-                <h3 className="text-lg font-bold text-white mt-0.5">RxNorm Drug Contraindication Inspector</h3>
+                <h3 className="text-lg font-bold text-white mt-0.5">Drug Interaction Inspector</h3>
                 <p className="text-xs text-slate-400 font-sans mt-0.5">
-                  The identical rule engine dispatched autonomously by the Voice Agent during conversational intake.
+                  The same curated rule set the Voice Agent calls during intake. Demo coverage only: 10 high-risk drug pairs.
                 </p>
               </div>
               <Pill className="w-5 h-5 text-emerald-400" />
@@ -1878,7 +1804,7 @@ export default function MediScribeConsole() {
               </div>
               <div className="flex items-center justify-between text-slate-300">
                 <span>TERMINOLOGY:</span>
-                <span className="text-emerald-400">RxNorm Verified</span>
+                <span className="text-emerald-400">medical-v1 domain</span>
               </div>
               <div className="flex items-center justify-between text-slate-300">
                 <span>LATENCY PROFILE:</span>

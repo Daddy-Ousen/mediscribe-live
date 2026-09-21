@@ -11,7 +11,7 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
 **MediScribe Live** solves this with an autonomous, voice-first clinical triage copilot and ambient medical scribe powered directly by **AssemblyAI Voice Agent API** and **Realtime STT**:
 
 1. **Bedside Conversational Voice Triage (AssemblyAI Voice Agent API)**:
-   - Full-duplex conversational voice agent acting as an empathetic bedside intake assistant with sub-600ms latency.
+   - Full-duplex conversational voice agent acting as an empathetic bedside intake assistant with natural turn-taking.
    - Real-time **JSON-Schema Tool Calling** (`check_drug_interaction`, `flag_critical_vital`, `record_patient_intake`).
    - Natural turn-taking, neural Voice Activity Detection (VAD), and instantaneous barge-in interruption handling via Web Audio API buffer flushing.
 2. **Multi-Patient Triage Queue & Shift Ledger**:
@@ -23,8 +23,10 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
    - Multi-speaker diarization distinguishing between `Doctor` and `Patient`.
    - Real-time clinical entity detection highlighting Symptoms, Medications, Dosages, and Diagnoses live on screen.
 4. **Automated SOAP Documentation & HL7 FHIR v4 Integration**:
-   - Synthesizes verbal dialogue into standardized clinical SOAP notes (Subjective, Objective, Assessment, Plan).
-   - Automated ICD-10 diagnostic coding classifications (e.g. `I20.0`, `I21.0`).
+   - Drafts SOAP notes (Subjective, Objective, Assessment, Plan) via the AssemblyAI LLM Gateway, from the recorded dialogue only.
+   - **No invented data:** anything not discussed is marked "Not discussed during encounter". Allergies are never defaulted to NKDA. There is no offline template fallback: if synthesis fails, no note is produced.
+   - Diagnosis and ICD-10 code appear only when the clinician states them. AI differentials are labeled as unconfirmed suggestions.
+   - Every note is an unsigned draft pending clinician review.
    - Generates and exports HL7 FHIR v4 Document Bundles (`application/fhir+json`).
 5. **Real-Time Spoken Demographics & Autonomous Intake Confirmation**:
    - Detects patient name and demographics directly from spoken intake turns, updating the clinical chart and shift ledger live.
@@ -56,7 +58,7 @@ In acute healthcare environments (Emergency Departments and acute trauma bays), 
                                  |                  |     - Speaker Diarization (Doc/Patient)  |
                                  v                  +------------------------------------------+
                    Internal Clinical KB
-                   - RxNorm Drug Contraindications
+                   - Curated drug-interaction rules (demo)
                    - Emergency Severity Index (ESI)
                    - HL7 FHIR v4 / ICD-10 Schemas
 ```
@@ -149,7 +151,7 @@ Deploy **MediScribe Live** directly to Vercel with zero configuration:
    - Switch to **Ambient Scribe** mode.
    - Click **"Start Ambient Scribe"** for continuous doctor-patient consultation transcription with medical nomenclature recognition.
 4. **Automated SOAP & FHIR Documentation**:
-   - Click **"Compile SOAP Documentation"** to synthesize verbal dialogues and triage presentations into structured SOAP notes with ICD-10 codification and HL7 FHIR v4 bundles.
+   - Click **"Compile SOAP Documentation"** to draft a SOAP note and HL7 FHIR v4 bundle from the recorded dialogue. Voice-agent tool data is passed in a labeled section, never as patient speech.
 
 ---
 

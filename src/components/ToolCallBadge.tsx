@@ -62,7 +62,7 @@ export const ToolCallBadge: React.FC<ToolCallBadgeProps> = ({ toolEvent }) => {
       {toolEvent.result && !toolEvent.result.details && (
         <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 pt-1">
           <CheckCircle className="w-3.5 h-3.5" />
-          <span>Verified against hospital clinical knowledge base</span>
+          <span>Recorded to encounter audit ledger</span>
         </div>
       )}
     </div>

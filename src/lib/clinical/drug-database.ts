@@ -70,7 +70,15 @@ export const KNOWN_DRUG_INTERACTIONS: KnownInteractionRule[] = [
   }
 ];
 
-export function checkDrugInteractions(medications: string[]): DrugInteraction[] {
+export function checkDrugInteractions(inputMeds: string[]): DrugInteraction[] {
+  // Case-insensitive de-duplication so "Warfarin" and "warfarin" raise one alert, not several
+  const seen = new Set<string>();
+  const medications = inputMeds.filter(m => {
+    const key = (m || '').toLowerCase().trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const normalizedMeds = medications.map(m => m.toLowerCase().trim());
   const found: DrugInteraction[] = [];
 
