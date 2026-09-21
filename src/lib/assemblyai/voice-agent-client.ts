@@ -206,17 +206,21 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
         case 'input.speech.stopped':
           break;
 
-        case 'transcript.user.delta':
-          if (msg.transcript) {
-            this.callbacks.onUserTranscript?.(msg.transcript, false);
+        case 'transcript.user.delta': {
+          const userDelta = msg.text || msg.transcript;
+          if (userDelta) {
+            this.callbacks.onUserTranscript?.(userDelta, false);
           }
           break;
+        }
 
-        case 'transcript.user':
-          if (msg.transcript) {
-            this.callbacks.onUserTranscript?.(msg.transcript, true);
+        case 'transcript.user': {
+          const userFinal = msg.text || msg.transcript;
+          if (userFinal) {
+            this.callbacks.onUserTranscript?.(userFinal, true);
           }
           break;
+        }
 
         case 'reply.started':
           this.currentAgentReply = '';
@@ -230,12 +234,23 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
           }
           break;
 
-        case 'transcript.agent':
-          if (msg.transcript) {
-            this.currentAgentReply += msg.transcript;
+        case 'transcript.agent.delta': {
+          const agentDelta = msg.text || msg.transcript;
+          if (agentDelta) {
+            this.currentAgentReply += agentDelta;
             this.callbacks.onAgentTranscript?.(this.currentAgentReply);
           }
           break;
+        }
+
+        case 'transcript.agent': {
+          const agentFinal = msg.text || msg.transcript;
+          if (agentFinal) {
+            this.currentAgentReply = agentFinal;
+            this.callbacks.onAgentTranscript?.(this.currentAgentReply);
+          }
+          break;
+        }
 
         case 'reply.done':
           if (this.shouldAutoClose) {
@@ -257,6 +272,12 @@ Speak in clear, concise, reassuring sentences (1-2 sentences) suitable for spoke
 
         case 'tool.call':
           this.executeToolCall(msg.call_id, msg.name, msg.arguments);
+          break;
+
+        case 'error':
+        case 'session.error':
+          console.error('AssemblyAI Voice Agent session error:', msg);
+          this.callbacks.onError?.(msg.message || msg.error || 'Voice Agent session error');
           break;
 
         default:
