@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 async function mintVoiceAgentToken() {
   const apiKey = process.env.ASSEMBLYAI_API_KEY;
@@ -26,6 +28,8 @@ async function mintVoiceAgentToken() {
       headers: {
         'Authorization': `Bearer ${apiKey}`,
       },
+      // Tokens are single-use and short-lived: never let Next.js cache this fetch
+      cache: 'no-store',
     }
   );
 

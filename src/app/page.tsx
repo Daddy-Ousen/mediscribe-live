@@ -1693,7 +1693,7 @@ export default function MediScribeConsole() {
             Engineered for High-Acuity Triage
           </h2>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl font-sans">
-            Sub-second conversational intelligence anchored by clinical pharmacology rules and medical domain models.
+            Streaming voice and transcription, with clinical rules and a medical-tuned speech model.
           </p>
         </div>
 
@@ -1877,8 +1877,8 @@ export default function MediScribeConsole() {
                 <span className="text-emerald-400">medical-v1 domain</span>
               </div>
               <div className="flex items-center justify-between text-slate-300">
-                <span>LATENCY PROFILE:</span>
-                <span className="text-slate-200">Sub-Second Stream</span>
+                <span>LATENCY:</span>
+                <span className="text-slate-200">Measured live in cockpit</span>
               </div>
             </div>
           </div>

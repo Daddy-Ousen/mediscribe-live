@@ -53,5 +53,13 @@ Submit: title, short + long description, tags, cover image, video, slides, publi
 - [x] README: replaced unsourced "40%" claim with Sinsky 2016 citation; removed "Sub-second Latency".
 - [x] Wrote `SUBMISSION.md` (title, descriptions, tags, checklist, video script).
 
+## Live bug + slides (2026-09-22, branch fix/stale-stt-token, NOT committed)
+- [x] BUG: live ambient scribe failed ("Signature has expired", 1008). Cause: Next.js Data Cache cached the server fetch to AssemblyAI, so /api/token/streaming returned the SAME old token to everyone. Fix: `cache: 'no-store'` + `revalidate = 0` + `fetchCache = 'force-no-store'` in both token routes. Verified on local prod build: 3 different tokens, session Begins, full e2e WAV run 0 console errors, SOAP 9/9 sourced, sign-off works.
+- [x] Removed "Sub-second" claims from the architecture section of page.tsx.
+- [x] Slides deck: https://claude.ai/artifact/Nwf8zLF2TntuPUYAaCzvra (12 slides, real screenshots).
+- [x] Cover: submission/cover.png (1920x1080). Source: .playwright-mcp/cover.html (gitignored).
+- [ ] User: commit, push, merge PR, confirm live tokens differ each call.
+- [ ] Known small issue: the first partial turn ("morning.") can stay "IDENTIFYING SPEAKER".
+
 ## Decisions
 - Next.js 14 app router, client-side WebSockets with server-minted tokens.
