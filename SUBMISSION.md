@@ -37,10 +37,11 @@ AssemblyAI, Voice Agent, Speech-to-Text, Healthcare, Medical Scribe, Next.js, FH
 ## Checklist
 - [x] Public GitHub repo with README and MIT LICENSE
 - [x] Live app deployed; token routes and SOAP route return 200
+- [ ] Deploy the stale-token fix (branch fix/stale-stt-token). Before it, the live ambient scribe fails.
 - [ ] Mic test on the live site in Chrome (voice agent + scribe)
-- [ ] Cover image (16:9)
+- [x] Cover image: `submission/cover.png` (1920x1080)
 - [ ] Demo video (3-5 min)
-- [ ] Slides (PDF)
+- [x] Slides: https://claude.ai/artifact/Nwf8zLF2TntuPUYAaCzvra (12 slides). Download as PDF from the deck page.
 
 ## Demo video script (about 3 min)
 1. 0:00 Problem: note-typing burden, and why trust needs sources.

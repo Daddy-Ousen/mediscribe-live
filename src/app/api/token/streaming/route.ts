@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET(request: Request) {
   try {
@@ -20,6 +22,8 @@ export async function GET(request: Request) {
       headers: {
         'Authorization': apiKey,
       },
+      // Tokens are single-use and short-lived: never let Next.js cache this fetch
+      cache: 'no-store',
     });
 
     if (!response.ok) {
